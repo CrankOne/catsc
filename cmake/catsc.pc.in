@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+includedir=${prefix}/include
+libdir=${exec_prefix}/lib
+
+Name: catsc
+Description: Cellular automaton for particle track finding.
+URL: https://github.com/CrankOne/catsc
+Version: @CATSC_VERSION@
+Cflags: @BUILD_CXX_FLAGS@
+Libs: -L${libdir} -l@catsc_LIB@

@@ -4,9 +4,9 @@ cmake_minimum_required(VERSION 3.1)
 # Main library
 
 project(catsc)
-set( CATSC_VERSION_MAJOR 1 )
-set( CATSC_VERSION_MINOR 0 )
-set( CATSC_VERSION ${CATSC_VERSION_MAJOR}.${CATSC_VERSION_MINOR} )
+set( catsc_VERSION_MAJOR 1 )
+set( catsc_VERSION_MINOR 0 )
+set( catsc_VERSION ${catsc_VERSION_MAJOR}.${catsc_VERSION_MINOR} )
 
 set(CATS_COORDINATE_TYPE float CACHE STRING "C type used to describe spatial coordinates")
 set(CATS_HIT_ID_TYPE "unsigned int" CACHE STRING "C type used to identify hit on layer")
@@ -20,15 +20,11 @@ add_library(${catsc_LIB} SHARED ${catsc_SOURCES})
 target_include_directories(${catsc_LIB} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include> )
-set_target_properties( ${catsc_LIB} PROPERTIES VERSION ${CATSC_VERSION}
-                       SOVERSION ${CATSC_VERSION_MAJOR} )
+set_target_properties( ${catsc_LIB} PROPERTIES VERSION ${catsc_VERSION}
+                       SOVERSION ${catsc_VERSION_MAJOR} )
 
-install( TARGETS ${catsc_LIB} EXPORT ${catsc_LIB} LIBRARY
-         PUBLIC_HEADER DESTINATION include/catsc )
-install( FILES include/catsc/cats.h
-               include/catsc/cats.hh
-               ${CMAKE_CURRENT_BINARY_DIR}/include/catsc/config.h
-         DESTINATION include/catsc )
+#include(GenerateExportHeader)
+#generate_export_header(catsc)
 
 #
 # Functional tests (require ROOT)
@@ -42,3 +38,31 @@ if(ROOT_FOUND)
     add_executable( catsc-test-mult main-gpl-test-mult.cc )
     target_link_libraries( catsc-test-mult ${catsc_LIB} ${ROOT_LIBRARIES} )
 endif(ROOT_FOUND)
+
+install( TARGETS ${catsc_LIB}
+         EXPORT catscTargets
+         #FILE_SET HEADERS
+         LIBRARY DESTINATION lib
+         ARCHIVE DESTINATION lib
+         RUNTIME DESTINATION bin
+         INCLUDES DESTINATION include
+         )
+install( EXPORT catscTargets
+         FILE catscTargets.cmake
+         NAMESPACE catsc::
+         DESTINATION lib/cmake/catsc
+         )
+install( FILES include/catsc/cats.h
+               include/catsc/cats.hh
+               ${CMAKE_CURRENT_BINARY_DIR}/include/catsc/config.h
+               #${CMAKE_CURRENT_BINARY_DIR}/catsc_export.h
+         DESTINATION include/catsc
+         COMPONENT Devel
+         )
+
+include(cmake/catscCreateConfig.cmake)
+
+# Uninstall target (TODO: leaves empty dirs)
+add_custom_target(uninstall
+    "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake"
+)
