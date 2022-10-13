@@ -66,12 +66,16 @@ protected:
 
 /** Filter callback type */
 int
-by_angle_filter( cats_HitID_t, const cats_Float_t * a
-               , cats_HitID_t, const cats_Float_t * b
-               , cats_HitID_t, const cats_Float_t * c
+by_angle_filter( cats_HitID_t, const void * a_
+               , cats_HitID_t, const void * b_
+               , cats_HitID_t, const void * c_
                , void * threshold_ ) {
     float * threshold = reinterpret_cast<float *>(threshold_);
-    cats_Float_t p[3][3] = {
+    const float * a = reinterpret_cast<const float *>(a_)
+              , * b = reinterpret_cast<const float *>(b_)
+              , * c = reinterpret_cast<const float *>(c_)
+              ;
+    float p[3][3] = {
         { a[0], a[1], a[2] },
         { b[0], b[1], b[2] },
         { c[0], c[1], c[2] }
@@ -94,7 +98,7 @@ by_angle_filter( cats_HitID_t, const cats_Float_t * a
 }
 
 struct TrackCandsWriteStruct {
-    std::unordered_map<cats_HitID_t, std::tuple<float, float, float>> hits;
+    std::unordered_map<cats_HitID_t, std::array<float, 3>> hits;
     FILE * outfile;
 };
 
@@ -105,9 +109,9 @@ _write_cands( cats_HitID_t * tc
     TrackCandsWriteStruct * tcws = reinterpret_cast<TrackCandsWriteStruct*>(tcws_);
     for(size_t tcN = 0; tcN < tcLen; ++tcN) {
         fprintf( tcws->outfile, "%e\t%e\t%e\n"
-               , std::get<0>(tcws->hits[tc[tcN]])
-               , std::get<1>(tcws->hits[tc[tcN]])
-               , std::get<2>(tcws->hits[tc[tcN]])
+               , tcws->hits[tc[tcN]][0]
+               , tcws->hits[tc[tcN]][1]
+               , tcws->hits[tc[tcN]][2]
                );
     }
     fputs("\n\n", tcws->outfile);
@@ -153,10 +157,12 @@ main(int argc, char * argv[]) {
                 cats_HitID_t hitID = nLayer*1000 + nPoint;
                 pointsOfstream << point(0) << "\t" << point(1) << "\t" << point(2)
                               << std::endl;
-                tcws.hits.emplace( hitID
-                                 , std::tuple<float, float, float>{point(0), point(1), point(2)});
+                auto ir = tcws.hits.emplace( hitID
+                                           , std::array<float, 3>{ (float) point(0)
+                                                                 , (float) point(1)
+                                                                 , (float) point(2) });
                 cats_layer_add_point( acc, nLayer
-                                    , point(0), point(1), point(2)
+                                    , &(ir.first->second)
                                     , hitID );
             }
         }

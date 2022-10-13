@@ -9,33 +9,21 @@
 extern "C" {
 #endif
 
-#ifndef CATS_COORDINATE_TYPE
-#   define CATS_COORDINATE_TYPE float
-#endif
-
 #ifndef CATS_HIT_ID_TYPE
 #   define CATS_HIT_ID_TYPE unsigned int
 #endif
 
-/** Type to describe spatial coordinate */
-typedef CATS_COORDINATE_TYPE cats_Float_t;
 /** Type identifying a hit */
 typedef CATS_HIT_ID_TYPE cats_HitID_t;
 
 /** Filter callback type */
-typedef int (*cats_Filter_t)( cats_HitID_t, const cats_Float_t *
-                            , cats_HitID_t, const cats_Float_t *
-                            , cats_HitID_t, const cats_Float_t *
+typedef int (*cats_Filter_t)( cats_HitID_t, const void *
+                            , cats_HitID_t, const void *
+                            , cats_HitID_t, const void *
                             , void * );
 
 /** Type to identify layers (internal) */
 typedef unsigned int cats_LayerNo_t;
-
-/** Type of track pair (layer's ID + points's ID) */
-struct cats_TrackPoint {
-    cats_LayerNo_t layerID;
-    cats_HitID_t hitID;
-};
 
 /* FWD */
 struct cats_Layers;
@@ -57,7 +45,7 @@ void cats_layers_delete(struct cats_Layers *);
  * \returns non-zero if failed to allocate memory for new point.
  * */
 int cats_layer_add_point( struct cats_Layers *, cats_LayerNo_t
-                        , cats_Float_t x, cats_Float_t y, cats_Float_t z
+                        , const void *
                         , cats_HitID_t id
                         );
 

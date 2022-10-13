@@ -64,14 +64,16 @@ protected:
     }
 };
 
+typedef catsc::TrackFinder<std::array<float, 3>> CATSTrackFinder;
+
 /** Filter callback type */
 struct ByAngleFilter : public CATSTrackFinder::iTripletFilter {
     float threshold;
     ByAngleFilter(float a) : threshold(a) {}
-    bool matches( cats_HitID_t, const cats_Float_t * a
-                , cats_HitID_t, const cats_Float_t * b
-                , cats_HitID_t, const cats_Float_t * c ) const override {
-        cats_Float_t p[3][3] = {
+    bool matches( cats_HitID_t, const std::array<float, 3> & a
+                , cats_HitID_t, const std::array<float, 3> & b
+                , cats_HitID_t, const std::array<float, 3> & c ) const override {
+        float p[3][3] = {
             { a[0], a[1], a[2] },
             { b[0], b[1], b[2] },
             { c[0], c[1], c[2] }
@@ -108,19 +110,19 @@ main(int argc, char * argv[]) {
         { new GausPlaneGenerator( {0, 0, 0}, {0, 0, 0}
                               ,  0.23, 1.2
                               , -0.12, 1.43 )
-        , 10, 50 },
+        , 15, 50 },
         { new GausPlaneGenerator( {-0.17, 0.23, 5}, {M_PI/6, M_PI/12, 0}
                               , -0.12, 3.2
                               ,  1.2,  0.75 )
-        , 2, 100 },
+        , 15, 100 },
         { new GausPlaneGenerator( {0.7, 0.25, 12}, {M_PI/8, -M_PI/8, M_PI/4}
                               ,  0.07, 1.5
                               ,  0.2,  1.75 )
-        , 2, 10 },
+        , 10, 10 },
         { new GausPlaneGenerator( {-0.02, 0.035, 17}, {-M_PI/9, -M_PI/67, M_PI/3}
                               ,  2.23, 1.5
                               ,  0.2,  0.26 )
-        , 10, 50 },
+        , 15, 50 },
         { nullptr, 0 }
     };
     // Other parameters
@@ -140,11 +142,14 @@ main(int argc, char * argv[]) {
             for( size_t nPoint = 0; nPoint < nSamples; ++nPoint ) {
                 TVector3 point = p->l->get(gr);
                 cats_HitID_t hitID = nLayer*1000 + nPoint;
-                cats.add(nLayer, hitID, point(0), point(1), point(2));
+                cats.add(nLayer, hitID, std::array<float, 3>{ (float) point(0)
+                                                            , (float) point(1)
+                                                            , (float) point(2)} );
             }
         }
         cats.collect(filter, collector, minLength, nMissingLayers);
         cats.reset();
+        std::cout << "event #" << nIt << " done." << std::endl;
     }
 
     for( auto p = layers; p->l; ++p ) {

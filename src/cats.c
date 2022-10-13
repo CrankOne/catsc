@@ -71,8 +71,8 @@ _cell_refs_free( struct CellRefs * ptr ) {
 struct cats_Point {
     /** Hit identifier */
     cats_HitID_t id;
-    /** Spatial position of the hit (x, y, z) */
-    float c[3];
+    /** Hit payload data ptr (spatial coordinates) */
+    const void * data;
     /** Collection of incoming "cells" */
     struct CellRefs refs;
 };
@@ -108,7 +108,7 @@ _layer_free( struct Layer * l ) {
 
 static int
 _layer_add_point( struct Layer * l
-                , cats_Float_t x, cats_Float_t y, cats_Float_t z
+                , const void * data
                 , cats_HitID_t id ) {
     if( l->nPointsUsed + 1 > l->nPointsAllocated ) {
         l->nPointsAllocated += CATS_NPOINTS_REALLOC_STRIDE;
@@ -127,9 +127,7 @@ _layer_add_point( struct Layer * l
     }
 
     l->points[l->nPointsUsed].id = id;
-    l->points[l->nPointsUsed].c[0] = x;
-    l->points[l->nPointsUsed].c[1] = y;
-    l->points[l->nPointsUsed].c[2] = z;
+    l->points[l->nPointsUsed].data = data;
     _cell_refs_reset(&l->points[l->nPointsUsed].refs);
     ++(l->nPointsUsed);
     return 0;
@@ -188,14 +186,14 @@ cats_layers_delete(struct cats_Layers * lyrs) {
 int
 cats_layer_add_point( struct cats_Layers * lsPtr
                     , cats_LayerNo_t layerNo
-                    , cats_Float_t x, cats_Float_t y, cats_Float_t z
+                    , const void * data
                     , cats_HitID_t id
                     ) {
     assert(lsPtr);
     assert(lsPtr->layers);
     if(layerNo >= lsPtr->nLayers) return -1;
     struct Layer * l = lsPtr->layers + layerNo;
-    return _layer_add_point( l, x, y, z, id );
+    return _layer_add_point( l, data, id );
 }
 
 void
@@ -256,7 +254,7 @@ static void
 _point_to_json( struct cats_Point * p, FILE * outf ) {
     fputs("{\"ptr\":", outf);
     fprintf(outf, "\"%p\",\"id\":%u,", p, (unsigned int) p->id);
-    fprintf(outf, "\"c\":[%f, %f, %f],", p->c[0], p->c[1], p->c[2]);
+    fprintf(outf, "\"c\":\"%p\",", p->data);
     fputs("\"refs\":[", outf);
     for( size_t nRef = 0; nRef < p->refs.nUsed; ++nRef ) {
         if(nRef) fputc(',', outf);
@@ -362,9 +360,9 @@ _connect_layers( struct Cell * cCell
                 struct Cell * leftCellPtr = fromHit->refs.cells[i];
                 assert( leftCellPtr->to == fromHit );
                 /* Check triplet and create cells if test passed */
-                if(test_triplet( leftCellPtr->from->id, leftCellPtr->from->c
-                               , fromHit->id,           fromHit->c
-                               , toHit->id,             toHit->c
+                if(test_triplet( leftCellPtr->from->id, leftCellPtr->from->data
+                               , fromHit->id,           fromHit->data
+                               , toHit->id,             toHit->data
                                , userData
                                )) {
                     _cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]);
