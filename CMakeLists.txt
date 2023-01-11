@@ -37,6 +37,11 @@ if(ROOT_FOUND)
 
     add_executable( catsc-test-mult main-gpl-test-mult.cc )
     target_link_libraries( catsc-test-mult ${catsc_LIB} ${ROOT_LIBRARIES} )
+
+    #separate_arguments(ROOT_CXX_FLAGS_ UNIX_COMMAND ${ROOT_CXX_FLAGS})
+    #list( REMOVE_ITEM ROOT_CXX_FLAGS_ -std=c++11 -std=c++14 )
+    #target_compile_options(catsc-test-mult PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${ROOT_CXX_FLAGS_}>)
+    #list(APPEND CMAKE_BUILD_RPATH "${ROOT_LIBRARY_DIR}")
 endif(ROOT_FOUND)
 
 install( TARGETS ${catsc_LIB}

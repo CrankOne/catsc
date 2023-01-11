@@ -69,10 +69,8 @@ _cell_refs_free( struct CellRefs * ptr ) {
  */
 
 struct cats_Point {
-    /** Hit identifier */
-    cats_HitID_t id;
     /** Hit payload data ptr (spatial coordinates) */
-    const void * data;
+    cats_HitData_t data;
     /** Collection of incoming "cells" */
     struct CellRefs refs;
 };
@@ -108,8 +106,8 @@ _layer_free( struct Layer * l ) {
 
 static int
 _layer_add_point( struct Layer * l
-                , const void * data
-                , cats_HitID_t id ) {
+                , cats_HitData_t data
+                ) {
     if( l->nPointsUsed + 1 > l->nPointsAllocated ) {
         l->nPointsAllocated += CATS_NPOINTS_REALLOC_STRIDE;
         struct cats_Point * newPoints
@@ -126,7 +124,6 @@ _layer_add_point( struct Layer * l
         }
     }
 
-    l->points[l->nPointsUsed].id = id;
     l->points[l->nPointsUsed].data = data;
     _cell_refs_reset(&l->points[l->nPointsUsed].refs);
     ++(l->nPointsUsed);
@@ -186,20 +183,28 @@ cats_layers_delete(struct cats_Layers * lyrs) {
 int
 cats_layer_add_point( struct cats_Layers * lsPtr
                     , cats_LayerNo_t layerNo
-                    , const void * data
-                    , cats_HitID_t id
+                    , cats_HitData_t datum
                     ) {
     assert(lsPtr);
     assert(lsPtr->layers);
     if(layerNo >= lsPtr->nLayers) return -1;
     struct Layer * l = lsPtr->layers + layerNo;
-    return _layer_add_point( l, data, id );
+    return _layer_add_point( l, datum );
+}
+
+size_t
+cats_layer_n_points( const struct cats_Layers * lsPtr
+                   , cats_LayerNo_t N ) {
+    if( !lsPtr ) return 0;
+    if( !lsPtr->layers ) return 0;
+    if( N >= lsPtr->nLayers ) return 0;
+    return lsPtr->layers[N].nPointsUsed;
 }
 
 void
 cats_layers_reset( struct cats_Layers * ls, size_t softLimitHits ) {
     for( cats_LayerNo_t i = 0; i < ls->nLayers; ++i ) {
-        _layer_reset(ls->layers, softLimitHits);
+        _layer_reset(ls->layers + i, softLimitHits);
     }
 }
 
@@ -253,7 +258,7 @@ _cell_to_json(struct Cell * cell, FILE * outf) {
 static void
 _point_to_json( struct cats_Point * p, FILE * outf ) {
     fputs("{\"ptr\":", outf);
-    fprintf(outf, "\"%p\",\"id\":%u,", p, (unsigned int) p->id);
+    fprintf(outf, "\"%p\",", p);
     fprintf(outf, "\"c\":\"%p\",", p->data);
     fputs("\"refs\":[", outf);
     for( size_t nRef = 0; nRef < p->refs.nUsed; ++nRef ) {
@@ -360,9 +365,9 @@ _connect_layers( struct Cell * cCell
                 struct Cell * leftCellPtr = fromHit->refs.cells[i];
                 assert( leftCellPtr->to == fromHit );
                 /* Check triplet and create cells if test passed */
-                if(test_triplet( leftCellPtr->from->id, leftCellPtr->from->data
-                               , fromHit->id,           fromHit->data
-                               , toHit->id,             toHit->data
+                if(test_triplet( leftCellPtr->from->data
+                               , fromHit->data
+                               , toHit->data
                                , userData
                                )) {
                     _cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]);
@@ -467,39 +472,39 @@ cats_evolve( struct cats_Layers * ls
 }
 
 struct PointsStack {
-    cats_HitID_t * ids;
+    cats_HitData_t * data;
     ssize_t nTop;
 };
 
 void
 _stack_push( struct PointsStack * stack
-           , cats_HitID_t id ) {
-    stack->ids[++(stack->nTop)] = id;
+           , cats_HitData_t datum ) {
+    stack->data[++(stack->nTop)] = datum;
     assert(stack->nTop >= 0);
 }
 
-cats_HitID_t
+cats_HitData_t
 _stack_top( struct PointsStack * stack ) {
-    return stack->ids[stack->nTop];
+    return stack->data[stack->nTop];
 }
 
-cats_HitID_t
+cats_HitData_t
 _stack_pull( struct PointsStack * stack ) {
-    cats_HitID_t tID = _stack_top(stack);
+    cats_HitData_t datum = _stack_top(stack);
     --(stack->nTop);
     assert(stack->nTop >= -1);
-    return tID;
+    return datum;
 }
 
 static void
 _eval_from( struct Cell * cell
           , struct PointsStack * stack
-          , void (*callback)(cats_HitID_t *, size_t, void *)
+          , void (*callback)(const cats_HitData_t *, size_t, void *)
           , void * userdata ) {
-    assert(_stack_top(stack) == cell->to->id);
-    _stack_push(stack, cell->from->id);
+    assert(_stack_top(stack) == cell->to->data);
+    _stack_push(stack, cell->from->data);
     if( 1 == cell->state ) {
-        callback(stack->ids, stack->nTop + 1, userdata);
+        callback(stack->data, stack->nTop + 1, userdata);
     } else {
         for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
             struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
@@ -512,26 +517,26 @@ _eval_from( struct Cell * cell
     #ifdef NDEBUG
     _stack_pull(stack);
     #else
-    assert(_stack_pull(stack) == cell->from->id);
+    assert(_stack_pull(stack) == cell->from->data);
     #endif
 }
 
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
-                             , void (*callback)(cats_HitID_t *, size_t, void *)
+                             , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              ) {
     /* initialize traversing stack */
     struct PointsStack stack;
-    stack.ids = malloc(ls->nLayers*sizeof(cats_HitID_t));
+    stack.data = malloc(ls->nLayers*sizeof(cats_HitData_t));
     stack.nTop = -1;
     /* evaluate traversing */
     for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
         struct Layer * l = ls->layers + nLayer;
         for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
             struct cats_Point * ptStart = l->points + nHit;
-            _stack_push(&stack, ptStart->id);
+            _stack_push(&stack, ptStart->data);
             for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
@@ -541,10 +546,10 @@ cats_for_each_track_candidate( struct cats_Layers * ls
             #ifdef NDEBUG
             _stack_pull(&stack);
             #else
-            assert(_stack_pull(&stack) == ptStart->id);
+            assert(_stack_pull(&stack) == ptStart->data);
             #endif
         }
     }
-    free(stack.ids);
+    free(stack.data);
 }
 

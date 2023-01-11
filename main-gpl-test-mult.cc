@@ -17,6 +17,7 @@ class iLayerPointGenerator {
 public:
     /// Samples point
     virtual TVector3 get( TRandom & ) const = 0;
+    virtual ~iLayerPointGenerator(){}
 };
 
 /// Base class for placed/oriented generators
@@ -70,9 +71,9 @@ typedef catsc::TrackFinder<std::array<float, 3>> CATSTrackFinder;
 struct ByAngleFilter : public CATSTrackFinder::iTripletFilter {
     float threshold;
     ByAngleFilter(float a) : threshold(a) {}
-    bool matches( cats_HitID_t, const std::array<float, 3> & a
-                , cats_HitID_t, const std::array<float, 3> & b
-                , cats_HitID_t, const std::array<float, 3> & c ) const override {
+    bool matches( const std::array<float, 3> & a
+                , const std::array<float, 3> & b
+                , const std::array<float, 3> & c ) const override {
         float p[3][3] = {
             { a[0], a[1], a[2] },
             { b[0], b[1], b[2] },
@@ -97,7 +98,7 @@ struct ByAngleFilter : public CATSTrackFinder::iTripletFilter {
 };
 
 struct Collector : public CATSTrackFinder::iTrackCandidateCollector {
-    void collect(cats_HitID_t *, size_t ) override {}
+    void collect(const cats_HitData_t *, size_t ) override {}
 };
 
 int
@@ -132,7 +133,11 @@ main(int argc, char * argv[]) {
     // Create reentrant track finder instance, filter and collector
     ByAngleFilter filter(.97*M_PI);
     Collector collector;
-    CATSTrackFinder cats(sizeof(layers)/sizeof(*layers));
+    CATSTrackFinder cats( sizeof(layers)/sizeof(*layers) - 1
+                        , 10  // cells
+                        , 10  // hits
+                        , 10  // refs
+                        );
     // Generate points
     TRandom gr;
     for(size_t nIt = 0; nIt < nIts; ++nIt) {
@@ -141,12 +146,17 @@ main(int argc, char * argv[]) {
             size_t nSamples = p->nHitsMin + gr.Integer(p->nHitsMax - p->nHitsMin);
             for( size_t nPoint = 0; nPoint < nSamples; ++nPoint ) {
                 TVector3 point = p->l->get(gr);
-                cats_HitID_t hitID = nLayer*1000 + nPoint;
-                cats.add(nLayer, hitID, std::array<float, 3>{ (float) point(0)
-                                                            , (float) point(1)
-                                                            , (float) point(2)} );
+                cats.add(nLayer, std::array<float, 3>{ (float) point(0)
+                                                     , (float) point(1)
+                                                     , (float) point(2)} );
             }
         }
+
+        for( cats_LayerNo_t nLayer = 0; nLayer < cats.n_layers(); ++nLayer ) {
+            std::cout << "  #" << (int) nLayer << ": "
+                      << cats.n_points(nLayer) << std::endl;
+        }
+
         cats.collect(filter, collector, minLength, nMissingLayers);
         cats.reset();
         std::cout << "event #" << nIt << " done." << std::endl;

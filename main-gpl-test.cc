@@ -11,6 +11,7 @@
 #include <iostream>
 #include <fstream>
 #include <cstdio>
+#include <list>
 
 /// Base class generating random spatial point
 class iLayerPointGenerator {
@@ -66,9 +67,9 @@ protected:
 
 /** Filter callback type */
 int
-by_angle_filter( cats_HitID_t, const void * a_
-               , cats_HitID_t, const void * b_
-               , cats_HitID_t, const void * c_
+by_angle_filter( cats_HitData_t a_
+               , cats_HitData_t b_
+               , cats_HitData_t c_
                , void * threshold_ ) {
     float * threshold = reinterpret_cast<float *>(threshold_);
     const float * a = reinterpret_cast<const float *>(a_)
@@ -98,21 +99,18 @@ by_angle_filter( cats_HitID_t, const void * a_
 }
 
 struct TrackCandsWriteStruct {
-    std::unordered_map<cats_HitID_t, std::array<float, 3>> hits;
+    std::list<std::array<float, 3>> hits;
     FILE * outfile;
 };
 
 static void
-_write_cands( cats_HitID_t * tc
+_write_cands( const cats_HitData_t * tc
             , size_t tcLen
             , void * tcws_ ) {
     TrackCandsWriteStruct * tcws = reinterpret_cast<TrackCandsWriteStruct*>(tcws_);
     for(size_t tcN = 0; tcN < tcLen; ++tcN) {
-        fprintf( tcws->outfile, "%e\t%e\t%e\n"
-               , tcws->hits[tc[tcN]][0]
-               , tcws->hits[tc[tcN]][1]
-               , tcws->hits[tc[tcN]][2]
-               );
+        auto & hit = *(reinterpret_cast<const std::array<float, 3> *const*>(tc)[tcN]);
+        fprintf( tcws->outfile, "%e\t%e\t%e\n", hit[0], hit[1], hit[2] );
     }
     fputs("\n\n", tcws->outfile);
 }
@@ -154,16 +152,13 @@ main(int argc, char * argv[]) {
         for( auto p = layers; p->l; ++p, ++nLayer ) {
             for( size_t nPoint = 0; nPoint < p->nSamples; ++nPoint ) {
                 TVector3 point = p->l->get(gr);
-                cats_HitID_t hitID = nLayer*1000 + nPoint;
                 pointsOfstream << point(0) << "\t" << point(1) << "\t" << point(2)
                               << std::endl;
-                auto ir = tcws.hits.emplace( hitID
-                                           , std::array<float, 3>{ (float) point(0)
-                                                                 , (float) point(1)
-                                                                 , (float) point(2) });
+                tcws.hits.push_back( std::array<float, 3>{ (float) point(0)
+                                                         , (float) point(1)
+                                                         , (float) point(2) });
                 cats_layer_add_point( acc, nLayer
-                                    , &(ir.first->second)
-                                    , hitID );
+                                    , &(tcws.hits.back()) );
             }
         }
     }

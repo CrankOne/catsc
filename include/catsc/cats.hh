@@ -17,27 +17,30 @@ struct BaseTrackFinder {
         /// Shall consider/collect the track candidate defined as ordered
         /// array of IDs of given size. Lifetime of provided array is not
         /// persistant.
-        virtual void collect(cats_HitID_t *, size_t) = 0;
+        virtual void collect(const cats_HitData_t *, size_t) = 0;
     };
 
     /// C callback implem to forward hits into collector
-    static void c_f_wrapper_collect( cats_HitID_t *, size_t nHits, void * );
+    static void c_f_wrapper_collect( const cats_HitData_t *, size_t nHits, void * );
 };
 
 template<typename DataT> struct HitDataTraits {
-    typedef std::unordered_map<::cats_HitID_t, DataT> CacheType;
+    typedef std::vector<DataT *> CacheType;
     typedef const DataT & HitInfo_t;
-    static DataT * get_data_ptr(CacheType * cachePtr, cats_HitID_t hitID, const DataT & ptr) {
-        auto ir = cachePtr->emplace(hitID, ptr);
-        return &(ir.first->second);
+    static DataT * get_data_ptr(CacheType & cacheRef, const DataT & obj) {
+        DataT * localCopyPtr = new DataT(obj);
+        cacheRef.push_back(localCopyPtr);
+        return localCopyPtr;
     }
+    static void reset(CacheType & cacheRef) { cacheRef.clear(); }
     typedef const DataT * HitInfoPtr_t;
 };
 
 template<typename DataT> struct HitDataTraits<DataT*> {
     struct CacheType {};
     typedef const DataT * HitInfo_t;
-    static DataT * get_data_ptr(CacheType *, cats_HitID_t, DataT * ptr) { return ptr; }
+    static DataT * get_data_ptr(CacheType &, DataT * ptr) { return ptr; }
+    static void reset(CacheType & cacheRef) {}
     typedef const DataT * HitInfoPtr_t;
 };
 
@@ -80,9 +83,9 @@ public:
         /// Should return whether triplet is possibly describes a segment of
         /// a track based on IDs and coordinates of three points. Lifetime of
         /// the provided ptrs is valid until `reset()` call.
-        virtual bool matches( cats_HitID_t, typename HitDataTraits<HitDataT>::HitInfo_t
-                            , cats_HitID_t, typename HitDataTraits<HitDataT>::HitInfo_t
-                            , cats_HitID_t, typename HitDataTraits<HitDataT>::HitInfo_t
+        virtual bool matches( typename HitDataTraits<HitDataT>::HitInfo_t
+                            , typename HitDataTraits<HitDataT>::HitInfo_t
+                            , typename HitDataTraits<HitDataT>::HitInfo_t
                             ) const = 0;
     };
 private:
@@ -96,11 +99,26 @@ private:
     size_t _softLimitCells, _softLimitHits, _softLimitRefs;
 
     /// C callback implem for applying the filter
-    static int c_f_wrapper_filter( cats_HitID_t id1, const void * c1
-                                 , cats_HitID_t id2, const void * c2
-                                 , cats_HitID_t id3, const void * c3
+    static int c_f_wrapper_filter( cats_HitData_t c1
+                                 , cats_HitData_t c2
+                                 , cats_HitData_t c3
                                  , void * filter_
                                  );
+    /// If set, inctance is ready to produce tracks
+    bool _evaluated;
+protected:
+    /// Evaluates the automaton.
+    ///
+    /// \throw `std::bad_alloc` on memory error
+    void _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
+        if( cats_evolve( _layers, _cells
+                       , TrackFinder<HitDataT>::c_f_wrapper_filter
+                       , &filter
+                       , nMissingLayers ) ) {
+            throw std::bad_alloc();
+        }
+        _evaluated = true;
+    }
 public:
     /// Constructs track finder instance for certain number of "layers"
     TrackFinder( cats_LayerNo_t nLayers
@@ -110,7 +128,9 @@ public:
                    ) : _nLayers(nLayers)
                      , _softLimitCells(softLimitCells)
                      , _softLimitHits(softLimitHits)
-                     , _softLimitRefs(softLimitRefs) {
+                     , _softLimitRefs(softLimitRefs)
+                     , _evaluated(false)
+                     {
         if( nLayers < 3 ) {
             throw std::runtime_error("Bad number of layers requested (<3).");
         }
@@ -126,17 +146,23 @@ public:
     }
 
     /// Adds point (a hit) to be considered on certain layer
-    void add( cats_LayerNo_t nLayer, cats_HitID_t id
-            , HitDataT data ) {
+    void add( cats_LayerNo_t nLayer, HitDataT data ) {
+        if( _evaluated )
+            throw std::runtime_error("Adding hits to instance with"
+                    " inapropriate state (after CATS evaluated).");  // missing reset() call?
         int rc = cats_layer_add_point(_layers, nLayer
-                , HitDataTraits<HitDataT>::get_data_ptr(this, id, data)
-                , id);
+                , HitDataTraits<HitDataT>::get_data_ptr(*this, data) );
         if(rc) throw std::bad_alloc();
     }
 
     /// Returns number of layers the finder was initialized to handle
     cats_LayerNo_t n_layers() const { return _nLayers; }
 
+    /// Returns number of hits added to layer N
+    size_t n_points(cats_LayerNo_t nLayer) { return cats_layer_n_points(_layers, nLayer); }
+
+    ///\brief Shortcut function to evaluate and collect the tracks at once
+    ///
     /// Builds the cells relying on provided filter, evaluates the algorithm
     /// on cells, and iterates over the all set of found tracks using
     /// collector.
@@ -147,12 +173,8 @@ public:
                 , unsigned int minLength
                 , unsigned int nMissingLayers
                 ) {
-        if( cats_evolve( _layers, _cells
-                       , TrackFinder<HitDataT>::c_f_wrapper_filter
-                       , &filter
-                       , nMissingLayers ) ) {
-            throw std::bad_alloc();
-        }
+        if( !_evaluated )
+            _evaluate(filter, nMissingLayers);
         cats_for_each_track_candidate(_layers, minLength
                 , c_f_wrapper_collect, &collector);
         cats_cells_pool_reset(_layers, _cells, _softLimitCells);
@@ -160,21 +182,24 @@ public:
     /// Drops associated hits
     void reset() {
         cats_layers_reset(_layers, _softLimitHits);
+        HitDataTraits<HitDataT>::reset(*this);
+        _evaluated = false;
+        cats_cells_pool_reset(_layers, _cells, _softLimitCells);
     }
 };
 
 template<typename HitDataT> int
-TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitID_t id1, const void * c1
-                                         , cats_HitID_t id2, const void * c2
-                                         , cats_HitID_t id3, const void * c3
+TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
+                                         , cats_HitData_t c2
+                                         , cats_HitData_t c3
                                          , void * filter_
                                          ) {
         // NOTE: it appears that resolving virtual ptr on vtable here drains
         //       performance to significant extent.
         return reinterpret_cast<typename TrackFinder<HitDataT>::iTripletFilter *>(filter_)
-            ->matches( id1, *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
-                     , id2, *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
-                     , id3, *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c3)
+            ->matches( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
+                     , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
+                     , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c3)
                      ) ? 1 : 0;
     }
 
@@ -192,13 +217,13 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitID_t id1, const void * c1
 class LongestUniqueTrackCollector : public BaseTrackFinder::iTrackCandidateCollector {
 private:
     ///\brief A storage of considered unique track candidates
-    std::vector<std::set<cats_HitID_t>> _collected;
+    std::vector<std::set<cats_HitData_t>> _collected;
 protected:
     ///\brief This method will be called only with unique track candidates
-    virtual void _consider_track_candidate(cats_HitID_t * hitIDs, size_t nHitIDs) = 0;
+    virtual void _consider_track_candidate(const cats_HitData_t * hitIDs, size_t nHitIDs) = 0;
 public:
     ///\brief Implements lookup for duplicates
-    virtual void collect(cats_HitID_t * hitIDs, size_t nHitIDs) override;
+    virtual void collect(const cats_HitData_t * hitIDs, size_t nHitIDs) override;
     /// Shall be called at the end of each event to drop the cache with track
     /// candidates being already considered
     virtual void reset() {

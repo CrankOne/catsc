@@ -9,17 +9,17 @@
 extern "C" {
 #endif
 
-#ifndef CATS_HIT_ID_TYPE
-#   define CATS_HIT_ID_TYPE unsigned int
+#ifndef CATS_HIT_DATA_TYPE
+#   define CATS_HIT_DATA_TYPE const void*
 #endif
 
-/** Type identifying a hit */
-typedef CATS_HIT_ID_TYPE cats_HitID_t;
+/** Type of hit data payload */
+typedef CATS_HIT_DATA_TYPE cats_HitData_t;
 
 /** Filter callback type */
-typedef int (*cats_Filter_t)( cats_HitID_t, const void *
-                            , cats_HitID_t, const void *
-                            , cats_HitID_t, const void *
+typedef int (*cats_Filter_t)( cats_HitData_t
+                            , cats_HitData_t
+                            , cats_HitData_t
                             , void * );
 
 /** Type to identify layers (internal) */
@@ -45,9 +45,16 @@ void cats_layers_delete(struct cats_Layers *);
  * \returns non-zero if failed to allocate memory for new point.
  * */
 int cats_layer_add_point( struct cats_Layers *, cats_LayerNo_t
-                        , const void *
-                        , cats_HitID_t id
+                        , const cats_HitData_t
                         );
+
+/**\brief Returns number of points in layer
+ *
+ * Used mainly for debug purposes.
+ *
+ * \returns number of points added with `cats_layer_add_point()` for layer N
+ * */
+size_t cats_layer_n_points( const struct cats_Layers *, cats_LayerNo_t );
 
 /**\brief Erases the hits collected within layers
  *
@@ -94,7 +101,7 @@ int cats_evolve( struct cats_Layers *
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
-                             , void (*callback)(cats_HitID_t *, size_t, void *)
+                             , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              );
 

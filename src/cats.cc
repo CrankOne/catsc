@@ -3,13 +3,15 @@
 #include <stdexcept>
 #include <algorithm>
 
+#include <iostream>  // XXX
+
 namespace catsc {
 
 //
 // Main C++ wrapper class
 
 void
-BaseTrackFinder::c_f_wrapper_collect( cats_HitID_t * hitIDs, size_t nHits, void * collector_ ) {
+BaseTrackFinder::c_f_wrapper_collect( const cats_HitData_t * hitIDs, size_t nHits, void * collector_ ) {
     reinterpret_cast<BaseTrackFinder::iTrackCandidateCollector*>(collector_)
         ->collect(hitIDs, nHits);
 }
@@ -18,10 +20,9 @@ BaseTrackFinder::c_f_wrapper_collect( cats_HitID_t * hitIDs, size_t nHits, void 
 // An utility class to provide "longest unique" sequences
 
 void
-LongestUniqueTrackCollector::collect(cats_HitID_t * hitIDs, size_t nHitIDs) {
-    std::set<cats_HitID_t> newSet(hitIDs, hitIDs + nHitIDs);
-    std::set<cats_HitID_t> diff;
-    bool hasNewHits = true;
+LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs) {
+    std::set<cats_HitData_t> newSet(hits, hits + nHitIDs);
+    std::set<cats_HitData_t> diff;
     for( const auto & cSet : _collected ) {
         // if given set is a subset of any of the already considered ones,
         // omit it
@@ -29,7 +30,7 @@ LongestUniqueTrackCollector::collect(cats_HitID_t * hitIDs, size_t nHitIDs) {
                            , cSet.begin(), cSet.end()
                            , std::inserter(diff, diff.begin())
                            );
-        if( ! diff.empty() ) {
+        if( diff.empty() ) {
             // new element didn't bring new hits with respect to one of
             // the already collected
             return;
@@ -38,7 +39,7 @@ LongestUniqueTrackCollector::collect(cats_HitID_t * hitIDs, size_t nHitIDs) {
     // if we are here, the hits sequence is unique and shall be considered
     // as a track candidate
     _collected.push_back(newSet);
-    _consider_track_candidate(hitIDs, nHitIDs);
+    _consider_track_candidate(hits, nHitIDs);
 }
 
 }  // namespace catsc
