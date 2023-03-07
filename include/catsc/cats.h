@@ -90,17 +90,21 @@ void cats_cells_pool_reset( struct cats_Layers *
  *
  * Constructs cellular automaton based on hits info and evaluates states till
  * convergence.
+ *
+ * Set `debugJSONStream` to disable debug dump for each iteration.
  * */
 int cats_evolve( struct cats_Layers *
                , struct cats_CellsPool *
                , cats_Filter_t test_triplet
                , void * userData
                , unsigned int nMissingLayers
+               , FILE * debugJSONStream
                );
 
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
+                             , unsigned int nMissingLayers
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              );

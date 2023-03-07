@@ -220,7 +220,8 @@ struct Cell {
     struct cats_Point * from
                     , * to
                     ;
-    unsigned int state;
+    unsigned int state:31;
+    unsigned int doAdvance:1;
     struct CellRefs leftNeighbours;
 };
 
@@ -229,6 +230,7 @@ _cell_init( struct Cell * ptr ) {
     ptr->from = NULL;
     ptr->to = NULL;
     ptr->state = 1;
+    ptr->doAdvance = 0;
     _cell_refs_init( &ptr->leftNeighbours );
 }
 
@@ -357,6 +359,7 @@ _connect_layers( struct Cell * cCell
             cCell->from = fromHit;
             cCell->to = toHit;
             cCell->state = 1;
+            cCell->doAdvance = 0;
             /* Cells (doublets) in left ("from") layer are created since we
              * iterate from left to right; fill up the neghbours list. If
              * `fromLayerCellRefs` we are probably on the leftmost layer (so
@@ -386,12 +389,10 @@ _advance_cell_state_if_need(struct Cell * cellPtr) {
     for( size_t nRef = 0
        ; nRef < cellPtr->leftNeighbours.nUsed
        ; ++nRef ) {
-        if( cellPtr->leftNeighbours.cells[nRef]->state == cellPtr->state ) {
-            ++(cellPtr->state);
-            return 1;
-        }
+        if( cellPtr->leftNeighbours.cells[nRef]->state != cellPtr->state ) continue;
+        cellPtr->doAdvance = 1;
     }
-    return 0;
+    return cellPtr->doAdvance;
 }
 
 int
@@ -399,7 +400,9 @@ cats_evolve( struct cats_Layers * ls
            , struct cats_CellsPool * a
            , cats_Filter_t test_triplet
            , void * userData
-           , unsigned int nMissingLayers ) {
+           , unsigned int nMissingLayers
+           , FILE * debugJSONStream
+           ) {
     assert(ls);
     assert(a);
     /* Estimated number of cells needed */
@@ -455,7 +458,7 @@ cats_evolve( struct cats_Layers * ls
     int advanced;
     do {
         advanced = 0;
-        for( cats_LayerNo_t toNLayer = 1
+        for( cats_LayerNo_t toNLayer = 0
            ; toNLayer < ls->nLayers
            ; ++toNLayer ) {
             for( size_t nPoint = 0; nPoint < ls->layers[toNLayer].nPointsUsed; ++nPoint ) {
@@ -466,6 +469,29 @@ cats_evolve( struct cats_Layers * ls
                     advanced |= _advance_cell_state_if_need(cellPtr);
                 }
             }
+        }
+        if(!advanced) {
+            if(debugJSONStream) { cats_dump_json(ls, debugJSONStream); }
+            break;
+        }
+        /* update states */
+        for( cats_LayerNo_t toNLayer = 1
+           ; toNLayer < ls->nLayers
+           ; ++toNLayer ) {
+            for( size_t nPoint = 0; nPoint < ls->layers[toNLayer].nPointsUsed; ++nPoint ) {
+                struct cats_Point * pointPtr = ls->layers[toNLayer].points + nPoint;
+                for( size_t nCell = 0; nCell < pointPtr->refs.nUsed; ++nCell ) {
+                    struct Cell * cellPtr = pointPtr->refs.cells[nCell];
+                    if(cellPtr->doAdvance) {
+                        ++(cellPtr->state);
+                        cellPtr->doAdvance = 0;
+                    }
+                }
+            }
+        }
+        if(debugJSONStream) {
+            cats_dump_json(ls, debugJSONStream);
+            putc(',', debugJSONStream);
         }
     } while(advanced);
     return 0;
@@ -500,17 +526,21 @@ static void
 _eval_from( struct Cell * cell
           , struct PointsStack * stack
           , void (*callback)(const cats_HitData_t *, size_t, void *)
-          , void * userdata ) {
+          , void * userdata
+          , unsigned int nMissingLayers
+          , unsigned int minLength
+          ) {
     assert(_stack_top(stack) == cell->to->data);
     _stack_push(stack, cell->from->data);
-    if( 1 == cell->state ) {
+    if( 1 == cell->state && stack->nTop >= minLength ) {
         callback(stack->data, stack->nTop + 1, userdata);
     } else {
         for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
             struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-            if( neighb->state + 1 == cell->state ) {
+            //if( neighb->state + 1 == cell->state ) {
+            if( cell->state - neighb->state <= nMissingLayers + 1 ) {
                 assert( neighb->to == cell->from );
-                _eval_from(neighb, stack, callback, userdata);
+                _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
             }
         }
     }
@@ -524,12 +554,14 @@ _eval_from( struct Cell * cell
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
+                             , unsigned int nMissingLayers
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              ) {
+    --minLength;
     /* initialize traversing stack */
     struct PointsStack stack;
-    stack.data = malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
     stack.nTop = -1;
     /* evaluate traversing */
     for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
@@ -541,7 +573,7 @@ cats_for_each_track_candidate( struct cats_Layers * ls
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from(cell, &stack, callback, userdata);
+                _eval_from(cell, &stack, callback, userdata, nMissingLayers, minLength);
             }
             #ifdef NDEBUG
             _stack_pull(&stack);

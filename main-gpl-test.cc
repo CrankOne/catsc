@@ -165,14 +165,14 @@ main(int argc, char * argv[]) {
 
     cats_CellsPool * cats = cats_cells_pool_create(4);
     float angleThreshold = .95*M_PI;
-    cats_evolve(acc, cats, by_angle_filter, &angleThreshold, 1);
+    cats_evolve(acc, cats, by_angle_filter, &angleThreshold, 1, NULL);
 
     FILE * outf = fopen("/tmp/cells-dump.json", "w");
     cats_dump_json(acc, outf);
     fclose(outf);
 
     tcws.outfile = fopen("/tmp/tracklets.dat", "w");
-    cats_for_each_track_candidate(acc, 3, _write_cands, &tcws);
+    cats_for_each_track_candidate(acc, 3, 1, _write_cands, &tcws);
     fclose(tcws.outfile);
 
     cats_cells_pool_delete(cats);

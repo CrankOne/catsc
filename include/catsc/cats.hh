@@ -38,7 +38,7 @@ template<typename DataT> struct HitDataTraits {
 
 template<typename DataT> struct HitDataTraits<DataT*> {
     struct CacheType {};
-    typedef const DataT * HitInfo_t;
+    typedef const DataT & HitInfo_t;
     static DataT * get_data_ptr(CacheType &, DataT * ptr) { return ptr; }
     static void reset(CacheType & cacheRef) {}
     typedef const DataT * HitInfoPtr_t;
@@ -106,6 +106,9 @@ private:
                                  );
     /// If set, inctance is ready to produce tracks
     bool _evaluated;
+    /// If set to non-null pointer, states for every iteration will be printed
+    /// as JSON into the file
+    FILE * _debugJSONStream;
 protected:
     /// Evaluates the automaton.
     ///
@@ -114,7 +117,9 @@ protected:
         if( cats_evolve( _layers, _cells
                        , TrackFinder<HitDataT>::c_f_wrapper_filter
                        , &filter
-                       , nMissingLayers ) ) {
+                       , nMissingLayers
+                       , _debugJSONStream
+                       ) ) {
             throw std::bad_alloc();
         }
         _evaluated = true;
@@ -125,11 +130,13 @@ public:
                    , size_t softLimitCells=10000
                    , size_t softLimitHits=100
                    , size_t softLimitRefs=1000
+                   , FILE * debugJSONStream=nullptr
                    ) : _nLayers(nLayers)
                      , _softLimitCells(softLimitCells)
                      , _softLimitHits(softLimitHits)
                      , _softLimitRefs(softLimitRefs)
                      , _evaluated(false)
+                     , _debugJSONStream(debugJSONStream)
                      {
         if( nLayers < 3 ) {
             throw std::runtime_error("Bad number of layers requested (<3).");
@@ -175,7 +182,7 @@ public:
                 ) {
         if( !_evaluated )
             _evaluate(filter, nMissingLayers);
-        cats_for_each_track_candidate(_layers, minLength
+        cats_for_each_track_candidate(_layers, minLength, nMissingLayers
                 , c_f_wrapper_collect, &collector);
         cats_cells_pool_reset(_layers, _cells, _softLimitCells);
     }
