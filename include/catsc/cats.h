@@ -92,6 +92,10 @@ void cats_cells_pool_reset( struct cats_Layers *
  * convergence.
  *
  * Set `debugJSONStream` to disable debug dump for each iteration.
+ *
+ * \returns    0 if automaton is evaluated and ready to provide the tracks.
+ * \returns -101 at cell (link b/w hits) allocation failure.
+ * \returns -102 at cell neighbor reference allocation failure.
  * */
 int cats_evolve( struct cats_Layers *
                , struct cats_CellsPool *

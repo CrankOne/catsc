@@ -33,8 +33,10 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
         if( diff.empty() ) {
             // new element didn't bring new hits with respect to one of
             // the already collected
+            std::cout << "  ... track declined" << std::endl;  // XXX
             return;
         }
+        diff.clear();
     }
     // if we are here, the hits sequence is unique and shall be considered
     // as a track candidate

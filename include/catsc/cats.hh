@@ -6,6 +6,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <cassert>
 
 namespace catsc {
 
@@ -109,23 +110,30 @@ private:
     /// If set to non-null pointer, states for every iteration will be printed
     /// as JSON into the file
     FILE * _debugJSONStream;
+    /// Internal flag, used to print debug info when stream ptr is given
+    bool _isFirstHit;
 protected:
     /// Evaluates the automaton.
     ///
     /// \throw `std::bad_alloc` on memory error
     void _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
+        if( _debugJSONStream ) fputs("},\"its\":[", _debugJSONStream);
         if( cats_evolve( _layers, _cells
                        , TrackFinder<HitDataT>::c_f_wrapper_filter
                        , &filter
                        , nMissingLayers
                        , _debugJSONStream
                        ) ) {
+            fputs("]}", _debugJSONStream);
             throw std::bad_alloc();
         }
+        fputs("]}", _debugJSONStream);
         _evaluated = true;
     }
 public:
     /// Constructs track finder instance for certain number of "layers"
+    ///
+    /// \throw `std::bad_alloc` if failed to allocate memory for layers or cells
     TrackFinder( cats_LayerNo_t nLayers
                    , size_t softLimitCells=10000
                    , size_t softLimitHits=100
@@ -137,6 +145,7 @@ public:
                      , _softLimitRefs(softLimitRefs)
                      , _evaluated(false)
                      , _debugJSONStream(debugJSONStream)
+                     , _isFirstHit(true)
                      {
         if( nLayers < 3 ) {
             throw std::runtime_error("Bad number of layers requested (<3).");
@@ -145,6 +154,7 @@ public:
         if(!_layers) throw std::bad_alloc();
         _cells = cats_cells_pool_create(nLayers);
         if(!_cells) throw std::bad_alloc();
+        if( _debugJSONStream ) fputs("{\"dict\":{", _debugJSONStream);
     }
     /// dtr, pretty strightforward one.
     ~TrackFinder() {
@@ -153,13 +163,23 @@ public:
     }
 
     /// Adds point (a hit) to be considered on certain layer
+    ///
+    /// \throw `std::bad_alloc` if could not allocate memory for hit
     void add( cats_LayerNo_t nLayer, HitDataT data ) {
         if( _evaluated )
             throw std::runtime_error("Adding hits to instance with"
                     " inapropriate state (after CATS evaluated).");  // missing reset() call?
-        int rc = cats_layer_add_point(_layers, nLayer
-                , HitDataTraits<HitDataT>::get_data_ptr(*this, data) );
-        if(rc) throw std::bad_alloc();
+        auto p = HitDataTraits<HitDataT>::get_data_ptr(*this, data);
+        assert(p);
+        int rc = cats_layer_add_point(_layers, nLayer, p);
+        if(rc != 0) throw std::bad_alloc();
+        if(_debugJSONStream) {
+            if(!_isFirstHit) fputc(',', _debugJSONStream); else _isFirstHit = false;
+            int nHit = cats_layer_n_points(_layers, nLayer);
+            fprintf( _debugJSONStream
+                   , "\"%p\":\"(%d,%d)\""
+                   , p, nLayer, nHit );
+        }
     }
 
     /// Returns number of layers the finder was initialized to handle
@@ -179,15 +199,18 @@ public:
                 , iTrackCandidateCollector & collector
                 , unsigned int minLength
                 , unsigned int nMissingLayers
+                , bool noCollect=false
                 ) {
         if( !_evaluated )
             _evaluate(filter, nMissingLayers);
+        if( noCollect ) return;
         cats_for_each_track_candidate(_layers, minLength, nMissingLayers
                 , c_f_wrapper_collect, &collector);
         cats_cells_pool_reset(_layers, _cells, _softLimitCells);
     }
     /// Drops associated hits
     void reset() {
+        _isFirstHit = true;
         cats_layers_reset(_layers, _softLimitHits);
         HitDataTraits<HitDataT>::reset(*this);
         _evaluated = false;

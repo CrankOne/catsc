@@ -4,13 +4,14 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <assert.h>
+#include <stdint.h>
 
 #ifndef CATS_NPOINTS_REALLOC_STRIDE
 #   define CATS_NPOINTS_REALLOC_STRIDE 8
 #endif
 
 #ifndef CATCATS_BACKREF_REALLOC_STRIDE
-#   define CATS_BACKREF_REALLOC_STRIDE 8
+#   define CATS_BACKREF_REALLOC_STRIDE 32
 #endif
 
 /* FWD */
@@ -34,14 +35,16 @@ _cell_refs_init( struct CellRefs * ptr ) {
 static int
 _cell_refs_add( struct CellRefs * ptr, struct Cell * cellPtr ) {
     if( ptr->nUsed + 1 > ptr->nAllocated ) {
+        if( SIZE_MAX - CATS_BACKREF_REALLOC_STRIDE <= ptr->nAllocated ) {
+            return -1;
+        }
         ptr->nAllocated += CATS_BACKREF_REALLOC_STRIDE;
         struct Cell ** newBackRefs
-            = (struct Cell **) reallocarray( ptr->cells
-                                           , ptr->nAllocated
-                                           , sizeof(struct Cell *) );
+            = (struct Cell **) realloc( ptr->cells
+                                      , ptr->nAllocated * sizeof(struct Cell *) );
         if(!newBackRefs) {
             ptr->nAllocated -= CATS_BACKREF_REALLOC_STRIDE;
-            return -1;
+            return -2;
         }
         ptr->cells = newBackRefs;
     }
@@ -111,7 +114,7 @@ _layer_add_point( struct Layer * l
     if( l->nPointsUsed + 1 > l->nPointsAllocated ) {
         l->nPointsAllocated += CATS_NPOINTS_REALLOC_STRIDE;
         struct cats_Point * newPoints
-            = (struct cats_Point *) reallocarray(l->points, l->nPointsAllocated, sizeof(struct cats_Point));
+            = (struct cats_Point *) realloc(l->points, l->nPointsAllocated * sizeof(struct cats_Point));
         if( !newPoints ) {
             /* failed to allocate space */
             l->nPointsAllocated -= CATS_NPOINTS_REALLOC_STRIDE;
@@ -373,11 +376,15 @@ _connect_layers( struct Cell * cCell
                                , toHit->data
                                , userData
                                )) {
-                    _cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]);
+                    if(_cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]) < 0) {
+                        return NULL;
+                    }
                 }
             }
             /* Unconditionally append to-hit refs */
-            _cell_refs_add(&toHit->refs, cCell);
+            if( _cell_refs_add(&toHit->refs, cCell) < 0 ) {
+                return NULL;
+            }
             ++cCell;
         }
     }
@@ -422,10 +429,9 @@ cats_evolve( struct cats_Layers * ls
     if(a->nCellsAllocated < nCellsNeed) {
         cats_cells_pool_reset(ls, a, 0);
         struct Cell * newCells
-            = (struct Cell *) reallocarray( a->pool
-                                          , nCellsNeed
-                                          , sizeof(struct Cell) );
-        if( !newCells ) return -1;
+            = (struct Cell *) realloc( a->pool
+                                     , nCellsNeed * sizeof(struct Cell) );
+        if( !newCells ) return -101;
         a->pool = newCells;
         /* initialize newly allocated cells for use */
         for( size_t nCell = a->nCellsAllocated
@@ -450,6 +456,7 @@ cats_evolve( struct cats_Layers * ls
                                    , test_triplet
                                    , userData
                                    );
+            if(NULL == cCell) return -102;
         }
     }
     /* Evaluate: iterate over cells interfacing the layer 2, 3... and
@@ -531,6 +538,7 @@ _eval_from( struct Cell * cell
           , unsigned int minLength
           ) {
     assert(_stack_top(stack) == cell->to->data);
+    cell->doAdvance = 1;
     _stack_push(stack, cell->from->data);
     if( 1 == cell->state && stack->nTop >= minLength ) {
         callback(stack->data, stack->nTop + 1, userdata);
@@ -572,6 +580,8 @@ cats_for_each_track_candidate( struct cats_Layers * ls
             for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
+                // use `doAdvance' flag to mark visited cells
+                if(cell->doAdvance) continue;  // "visited"
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
                 _eval_from(cell, &stack, callback, userdata, nMissingLayers, minLength);
             }

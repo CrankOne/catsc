@@ -24,10 +24,12 @@ def print_graphviz(f, d, l):
     for ptr, item in d.items():
         rank = int(item['layer'])
         byLayers[rank].append(ptr)
-        for con in item['cons']:
-            assert (ptr, con) in links.keys()
-            #print('link: ', (ptr, con) )
-            f.write('    \"%s\" -> \"%s\" [label=\"%d\"];\n'%(ptr, con, links[(ptr, con)]))
+        #for con in item['cons']:
+        #    assert (ptr, con) in links.keys()
+        #    #print('link: ', (ptr, con) )
+        #    f.write('    \"%s\" -> \"%s\" [label=\"%d\"];\n'%(ptr, con, links[(ptr, con)]))
+        for con, st in ([linkPair, linkState] for linkPair, linkState in links.items() if linkPair[0] == ptr):
+            f.write('    \"%s\" -> \"%s\" [label=\"%d\"];\n'%(ptr, con[1], st))
     # specify rank
     for layerNo, items in byLayers.items():
         f.write('    { rank = same ; %s}\n'%(', '.join(f'"{item}"' for item in items)) )
@@ -36,17 +38,20 @@ def print_graphviz(f, d, l):
         f.write('   \"%s\" [label=\"%s\"]\n'%(ptr, item['label']))
     f.write('}\n')
 
-with open('dict.json') as f:
-    hitsDict = json.load(f)
+#with open('dict.json') as f:
+#    hitsDict = json.load(f)
 
-with open('debug.json') as f:
+with open('catsc.json') as f:
     dbgLog = json.load(f)
 
 # split labels to get layer and hit ID
 rxsLbl = re.compile('^\\((?P<layer>\d+),(?P<hitNo>\d+)\\)')
-for ptr, item in hitsDict.items():
-    m = rxsLbl.match(item['label'])
-    item.update(m.groupdict())
+hitsDict = {}
+for ptr, item in dbgLog['dict'].items():
+    m = rxsLbl.match(item)
+    #item.update(m.groupdict())
+    hitsDict[ptr] = dict(m.groupdict())
+    hitsDict[ptr]['label'] = item
 
-print_graphviz(sys.stdout, hitsDict, dbgLog['iterations'][-1])
+print_graphviz(sys.stdout, hitsDict, dbgLog['its'][-1])
 #print(dbgLog['iterations'][0])  # XXX
