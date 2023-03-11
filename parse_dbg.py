@@ -18,7 +18,7 @@ def print_graphviz(f, d, l):
                 state = link['state']
                 links[(kFrom, kTo)] = state
     # ---
-    f.write('digraph G {\n')  # "    splines = false;\n"
+    f.write('digraph G {\nsplines="false"\n')  # "    splines = false;\n"
     byLayers = defaultdict(list)
     # put basic connections
     for ptr, item in d.items():
@@ -29,6 +29,7 @@ def print_graphviz(f, d, l):
         #    #print('link: ', (ptr, con) )
         #    f.write('    \"%s\" -> \"%s\" [label=\"%d\"];\n'%(ptr, con, links[(ptr, con)]))
         for con, st in ([linkPair, linkState] for linkPair, linkState in links.items() if linkPair[0] == ptr):
+            if st == 1: continue
             f.write('    \"%s\" -> \"%s\" [label=\"%d\"];\n'%(ptr, con[1], st))
     # specify rank
     for layerNo, items in byLayers.items():
@@ -41,7 +42,7 @@ def print_graphviz(f, d, l):
 #with open('dict.json') as f:
 #    hitsDict = json.load(f)
 
-with open('catsc.json') as f:
+with open(sys.argv[1]) as f:
     dbgLog = json.load(f)
 
 # split labels to get layer and hit ID

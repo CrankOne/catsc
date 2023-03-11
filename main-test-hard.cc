@@ -169,12 +169,10 @@ main(int argc, char * argv[]) {
                                           , nHitsPerLayer*1.25
                                           );
     // file to print out evaluation states, as JSON
-    FILE * debugJSONStream = fopen("debug.json", "w")
-       , * hitsDictStream = fopen("dict.json", "w");
+    FILE * debugJSONStream = fopen("debug.json", "w");
     // Track finder instance to populate
     CATSTrackFinder cats(nLayers, 1000, 10, 10, debugJSONStream);
     // generate "hard" hits topology
-    fputc('{', hitsDictStream);
     for(int nLayer = 0; nLayer < nLayers; ++nLayer) {
         // number of hits per layer choosen randomly +/- 50% of base value
         int nHitsOnLayer = urd(eng);
@@ -183,9 +181,6 @@ main(int argc, char * argv[]) {
         // populate layer with hits
         for(int nHit = 0; nHit < nHitsOnLayer; ++nHit) {
             HardHit * hit = new HardHit(nLayer, nHit);
-            if(nLayer || nHit) fputc(',', hitsDictStream);
-            fprintf(hitsDictStream, "\"%p\":{\"label\":\"(%d,%d)\",\"cons\":[",
-                    hit, nLayer, nHit);
             cats.add(nLayer, hit);  // for ptr it does not matter when to insert
             // establish some random backward connections:
             bool isFirst = true;
@@ -194,7 +189,7 @@ main(int argc, char * argv[]) {
                ; ++toLayer ) {
                 if(toLayer < 0) continue;
                 std::uniform_int_distribution<int> urd2( 1
-                                            , layers[toLayer].size()-1 );
+                                            , (layers[toLayer].size()-1)/2 );
                 int nLinks = urd2(eng);
                 std::uniform_int_distribution<int> urd3( 0
                                             , layers[toLayer].size()-1 );
@@ -209,25 +204,19 @@ main(int argc, char * argv[]) {
                     std::cout << " connecting " << *hit << " -> " << **it
                               << " [" << n << "]" << std::endl;
                     if(isFirst) isFirst = false;
-                    else fputc(',', hitsDictStream);
-                    fprintf(hitsDictStream, "\"%p\"", *it);
                     hit->insert(*it);
                 }
             }
             layers.back().insert(hit);
-            fputc(']', hitsDictStream);  // connections
-            fputc('}', hitsDictStream);  // node
         }
     }
-    fputc('}', hitsDictStream);
-    fclose(hitsDictStream);
     Collector collector;
     collector.prepare(layers, minLength);
 
     HardFilter f;
-    fputs("{\"iterations\":[", debugJSONStream);
+    //fputs("{\"iterations\":[", debugJSONStream);
     cats.collect(f, collector, minLength, nMissedLayers);
-    fputs("]}", debugJSONStream);
+    //fputs("]}", debugJSONStream);
 
     collector.dump(std::cout);  // XXX, initial state
 

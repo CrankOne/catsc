@@ -243,6 +243,9 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
  *
  * In comparison with original DFS search proposed by CATS papers it shall
  * correctly identify the cases with doubling hits.
+ *
+ * \todo see note in `_eval_from()` function of `cats.c`; there is unresolved
+ *       question on possible performance benefit
  * */
 class LongestUniqueTrackCollector : public BaseTrackFinder::iTrackCandidateCollector {
 private:

@@ -545,8 +545,18 @@ _eval_from( struct Cell * cell
     } else {
         for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
             struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-            //if( neighb->state + 1 == cell->state ) {
             if( cell->state - neighb->state <= nMissingLayers + 1 ) {
+                /* TODO: in principle, longest unique track can be obtained by
+                 * consiously keeping the link ref R of state <1 and traversing
+                 * the graph for nMissed layers depth, looking on whether R
+                 * shall be met. However, this recursive traversal is probably
+                 * less efficient in most cases than direct set comparison as
+                 * for N links and D depth it will require N*n_i*n_{i+1}*...*n_D
+                 * lookaheads; Resulting track comparison at C++ level must be
+                 * more performant due to dihotomy search... one should
+                 * probably benchmark this. On the other hand, tossing sets
+                 * around may slowdown the algo because of shared memory
+                 * issues. */
                 assert( neighb->to == cell->from );
                 _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
             }

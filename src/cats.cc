@@ -22,21 +22,51 @@ BaseTrackFinder::c_f_wrapper_collect( const cats_HitData_t * hitIDs, size_t nHit
 void
 LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs) {
     std::set<cats_HitData_t> newSet(hits, hits + nHitIDs);
-    std::set<cats_HitData_t> diff;
-    for( const auto & cSet : _collected ) {
-        // if given set is a subset of any of the already considered ones,
-        // omit it
-        std::set_difference( newSet.begin(), newSet.end()
-                           , cSet.begin(), cSet.end()
-                           , std::inserter(diff, diff.begin())
-                           );
-        if( diff.empty() ) {
-            // new element didn't bring new hits with respect to one of
-            // the already collected
-            std::cout << "  ... track declined" << std::endl;  // XXX
-            return;
+    assert(!newSet.empty());
+    for( auto it = _collected.begin(); it != _collected.end(); ++it ) {
+        const auto & cSet = *it;
+        assert(!cSet.empty());
+        if(cSet.size() > newSet.size()) {
+            // size of new set is less or equal to current --
+            // try to locate every element of new set in current. In
+            // case new set is a subset of existing, all the "new" elements
+            // must be found at existing and we shall ignore new
+            bool isSubset = true;
+            for(auto newEl : newSet) {
+                if(cSet.find(newEl) != cSet.end()) continue;
+                // new set brings at least one unique element -- skip further
+                // check
+                isSubset = false;
+                break;
+            }
+            if(isSubset) return;  // new is a subset, ignore
+        } else if( cSet.size() < newSet.size() ) {
+            // current set is smaller than new -- check if current is a subset
+            // and substitute current for new
+            bool isSubset = true;
+            for(auto curEl : cSet) {
+                if( newSet.find(curEl) != newSet.end() ) continue;
+                isSubset = false;
+                break;
+            }
+            if(isSubset) {
+                // current set is subset of new; impose new set and that's it
+                std::swap(*it, newSet);
+                return;
+            }
         }
-        diff.clear();
+        #ifndef NDEBUG
+        else {
+            // Algorithm guarantees that we can not have identical sets of the
+            // same size visited twice.
+            std::set<cats_HitData_t> diff;
+            std::set_symmetric_difference( newSet.begin(), newSet.end()
+                                         , cSet.begin(), cSet.end()
+                                         , std::inserter(diff, diff.begin())
+                                         );
+            assert(!diff.empty());
+        }
+        #endif
     }
     // if we are here, the hits sequence is unique and shall be considered
     // as a track candidate
