@@ -23,7 +23,8 @@ void
 LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs) {
     std::set<cats_HitData_t> newSet(hits, hits + nHitIDs);
     assert(!newSet.empty());
-    for( auto it = _collected.begin(); it != _collected.end(); ++it ) {
+    auto datIt = _collectedData.begin();
+    for( auto it = _collected.begin(); it != _collected.end(); ++it, ++datIt ) {
         const auto & cSet = *it;
         assert(!cSet.empty());
         if(cSet.size() > newSet.size()) {
@@ -52,6 +53,8 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
             if(isSubset) {
                 // current set is subset of new; impose new set and that's it
                 std::swap(*it, newSet);
+                std::vector<cats_HitData_t> nw(hits, hits + nHitIDs);
+                std::swap(*datIt, nw);
                 return;
             }
         }
@@ -71,7 +74,15 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
     // if we are here, the hits sequence is unique and shall be considered
     // as a track candidate
     _collected.push_back(newSet);
-    _consider_track_candidate(hits, nHitIDs);
+    //_consider_track_candidate(hits, nHitIDs);
+    _collectedData.push_back({hits, hits + nHitIDs});
+}
+
+void
+LongestUniqueTrackCollector::done() {
+    for(const auto & c : _collectedData) {
+        _consider_track_candidate(c.data(), c.size());
+    }
 }
 
 }  // namespace catsc

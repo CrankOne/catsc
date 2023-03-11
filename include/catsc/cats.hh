@@ -19,6 +19,8 @@ struct BaseTrackFinder {
         /// array of IDs of given size. Lifetime of provided array is not
         /// persistant.
         virtual void collect(const cats_HitData_t *, size_t) = 0;
+        /// Called after all the tracks has been collected.
+        virtual void done() {}
     };
 
     /// C callback implem to forward hits into collector
@@ -206,6 +208,7 @@ public:
         if( noCollect ) return;
         cats_for_each_track_candidate(_layers, minLength, nMissingLayers
                 , c_f_wrapper_collect, &collector);
+        collector.done();
         cats_cells_pool_reset(_layers, _cells, _softLimitCells);
     }
     /// Drops associated hits
@@ -249,14 +252,18 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
  * */
 class LongestUniqueTrackCollector : public BaseTrackFinder::iTrackCandidateCollector {
 private:
-    ///\brief A storage of considered unique track candidates
+    ///\brief A storage of considered unique track candidates, used for fast lookup
     std::vector<std::set<cats_HitData_t>> _collected;
+    ///\brief Storage of currently longest unique track candidates
+    std::vector<std::vector<cats_HitData_t>> _collectedData;
 protected:
     ///\brief This method will be called only with unique track candidates
     virtual void _consider_track_candidate(const cats_HitData_t * hitIDs, size_t nHitIDs) = 0;
 public:
     ///\brief Implements lookup for duplicates
-    virtual void collect(const cats_HitData_t * hitIDs, size_t nHitIDs) override;
+    void collect(const cats_HitData_t * hitIDs, size_t nHitIDs) override;
+    /// Runs `_consider_track_candidate()` on selected longest candidates
+    void done() override;
     /// Shall be called at the end of each event to drop the cache with track
     /// candidates being already considered
     virtual void reset() {
