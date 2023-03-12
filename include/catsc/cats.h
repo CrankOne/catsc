@@ -22,12 +22,19 @@ typedef int (*cats_Filter_t)( cats_HitData_t
                             , cats_HitData_t
                             , void * );
 
+/** Weighted filter callback type */
+typedef double (*cats_WeightedFilter_t)( cats_HitData_t
+                                       , cats_HitData_t
+                                       , cats_HitData_t
+                                       , void * );
+
 /** Type to identify layers (internal) */
 typedef unsigned int cats_LayerNo_t;
 
 /* FWD */
 struct cats_Layers;
 struct cats_CellsPool;
+struct cats_WeightedLinksPool;
 
 /**\brief Create layers collection
  *
@@ -105,6 +112,49 @@ int cats_evolve( struct cats_Layers *
                , FILE * debugJSONStream
                );
 
+/**\brief Re-sets "visited" flags after previous `collect()` call
+ *
+ * Re-sets internal state flags used to mark visited cells.
+ * */
+void reset_collection_flags( struct cats_CellsPool * );
+
+/**\brief Iterates over resulting connection graph visiting all the enumerated
+ *        subsets, excessively (with sub-sequences).
+ *
+ * Will invoke given callback on each found track candidate, including
+ * sub-sequences when they are permitted by non-weighted geometrical filter.
+ *
+ * Provides (efficient) equivalent to brute-forced connectionalgorithm,
+ * where all combinations passing through the geometrical filter are
+ * considered. Hit insertion order affects determinism: combinations
+ * corresponging to hits inserted first will be considered first.
+ *
+ * This evaluation routine provides excessive candidates and can be used
+ * for certain tracking strategies scrutinizing every possible track
+ * combination permitted by some geometrical filter, or as a last resort for
+ * cases of low efficiency.
+ * */
+void
+cats_for_each_track_candidate_excessive( struct cats_Layers * ls
+                                       , unsigned int minLength
+                                       , unsigned int nMissingLayers
+                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                       , void * userdata
+                                       );
+
+/**\brief Iterates over resulting connection graph visiting all the enumerated
+ *        subsets, permitting duplicating sub-sequences due to inefficiences
+ *
+ * This is collecting routine will invoke given callback on each found track
+ * candidate, including sub-sequences when they are permitted by non-weighted
+ * geometrical filter, omitting their sub-sequences. Hit insertion order
+ * affects determinism: combinations corresponging to hits inserted first will
+ * be considered first.
+ *
+ * This evaluation routine can be preferable for certain tracking scenarios
+ * whith low multiplicity and low efficiency, albeit for high multiplicities
+ * can create highly excessive redundancy.
+ * */
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
@@ -112,6 +162,70 @@ cats_for_each_track_candidate( struct cats_Layers * ls
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              );
+
+/**\brief Iterates over resulting connection graph visiting enumerated
+ *        subsets, preferring longest sequences, by hit insertion order.
+ *
+ * This routine will traverse connection graph preferring longest sequences
+ * over shorter ones (yet, still permitted by the unweighted geometrical
+ * filter). For concurrent tracks, a hit inserted first will be preferred.
+ *
+ * This function might be useful for tracking strategies anticipating deviated
+ * hits, like Kalman with deterministing annealing filter. It effectively reduces
+ * combinatorics, yet still can pick up nosiy hits and may incorrectly resolve
+ * pile-up concurrency. Since it does not need the weighted filter, this case
+ * can be still preferrable for tracking being sparse enough for some strict
+ * yet efficient geometrical filter.
+ * */
+void
+cats_for_each_longest_track_candidate( struct cats_Layers * ls
+                                     , unsigned int minLength
+                                     , unsigned int nMissingLayers
+                                     , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                     , void * userdata
+                                     );
+
+/**\brief Iterates over resulting graph, picking up weighted connections
+ *
+ * Choice among hits with concurrent weights will be resolved in favour of the
+ * ones (with highest weight), according to given weighting filter. If two
+ * weights are the same, first inserted of closest layer is preferred. Hit
+ * insertion order should not affect determinism.
+ *
+ * Effectively reduces combinatorics, yet loses some candidates with
+ * systematically loose weight (e.g. misaligned ones). This collecting routine
+ * can be preferred for systems with high detector redundancy, on high
+ * occupancies.
+ * */
+void
+cats_for_each_track_candidate_w( struct cats_Layers * ls
+                               , unsigned int minLength
+                               , unsigned int nMissingLayers
+                               , cats_WeightedFilter_t
+                               , void * userdataFilter
+                               , void (*callback)(const cats_HitData_t *, size_t, void *)
+                               , void * userdataCollect
+                               );
+
+/**\brief Iterates over resulting graph, picking up longest weighted connections
+ *
+ * Concurrent cells will be resolved in favor of the best among closest ones,
+ * according to weighting function. If two weights are the same, first inserted
+ * is preferred. Hit insertion order should not affect determinism.
+ *
+ * Effectively reduces combinatorics, yet loses some candidates with
+ * systematically loose weight (e.g. misaligned ones). This collecting routine
+ * is preferred for systems with low redundancy on moderate occuancies.
+ * */
+void
+cats_for_each_longest_track_candidate_w( struct cats_Layers * ls
+                                       , unsigned int minLength
+                                       , unsigned int nMissingLayers
+                                       , cats_WeightedFilter_t
+                                       , void * userdataFilter
+                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                       , void * userdataCollect
+                                       );
 
 #ifdef __cplusplus
 }  // extern "C"

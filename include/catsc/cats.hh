@@ -91,6 +91,14 @@ public:
                             , typename HitDataTraits<HitDataT>::HitInfo_t
                             ) const = 0;
     };
+    /// Base class for weighted hit triplet functor
+    struct iWeightedTripletFilter {
+        /// Sould return weight value for given triplet
+        virtual float weight( typename HitDataTraits<HitDataT>::HitInfo_t
+                            , typename HitDataTraits<HitDataT>::HitInfo_t
+                            , typename HitDataTraits<HitDataT>::HitInfo_t
+                            ) const = 0;
+    };
 private:
     /// Number of layers this instance was initialized to handle
     cats_LayerNo_t _nLayers;
@@ -101,19 +109,31 @@ private:
     /// Soft limits for allocations
     size_t _softLimitCells, _softLimitHits, _softLimitRefs;
 
-    /// C callback implem for applying the filter
+    /// C callback implem applying the filter
     static int c_f_wrapper_filter( cats_HitData_t c1
                                  , cats_HitData_t c2
                                  , cats_HitData_t c3
                                  , void * filter_
                                  );
+    /// C callback implem applying weighted filter
+    static double c_f_wrapper_wfilter( cats_HitData_t c1
+                                     , cats_HitData_t c2
+                                     , cats_HitData_t c3
+                                     , void * filter_
+                                     );
+
     /// If set, inctance is ready to produce tracks
     bool _evaluated;
+    /// Set to number of missing layers for which the automaton was evaluated
+    cats_LayerNo_t _lastNMissing;
     /// If set to non-null pointer, states for every iteration will be printed
     /// as JSON into the file
     FILE * _debugJSONStream;
     /// Internal flag, used to print debug info when stream ptr is given
     bool _isFirstHit;
+    /// Internal flag set after `collect()` call; used to re-set internal flags
+    /// before possible repeatative `collect()` calls
+    bool _wasCollected;
 protected:
     /// Evaluates the automaton.
     ///
@@ -132,6 +152,10 @@ protected:
         if(_debugJSONStream) fputs("]}", _debugJSONStream);
         _evaluated = true;
     }
+
+    ///\brief Must be called before repeatative `collect()` calls
+    void _reset_collection_flags()
+        { reset_collection_flags(_cells); }
 public:
     /// Constructs track finder instance for certain number of "layers"
     ///
@@ -190,29 +214,103 @@ public:
     /// Returns number of hits added to layer N
     size_t n_points(cats_LayerNo_t nLayer) { return cats_layer_n_points(_layers, nLayer); }
 
-    ///\brief Shortcut function to evaluate and collect the tracks at once
+    /// Evaluates automaton; prepares connection graph for track collection
+    void evaluate( iTripletFilter & filter
+                 , cats_LayerNo_t nMissingLayers ) {
+        if(_evaluated)
+            throw std::runtime_error("CATS already evaluated");
+        _lastNMissing = nMissingLayers;
+        _evaluate(filter, _lastNMissing);
+    }
+
+    ///\brief Collects all track candidates permitted by the filter, including
+    ///       all subsequences.
     ///
-    /// Builds the cells relying on provided filter, evaluates the algorithm
-    /// on cells, and iterates over the all set of found tracks using
-    /// collector.
-    ///
-    /// \note Added hits are erased once all the track candidates are collected.
-    void collect( iTripletFilter & filter
-                , iTrackCandidateCollector & collector
-                , unsigned int minLength
-                , unsigned int nMissingLayers
-                , bool noCollect=false
-                ) {
-        if( !_evaluated )
-            _evaluate(filter, nMissingLayers);
-        if( noCollect ) return;
-        cats_for_each_track_candidate(_layers, minLength, nMissingLayers
+    /// Forwards execution to `cats_for_each_track_candidate_excessive()` that
+    /// may generate highly excessive result (see docs).
+    void collect_excessive( iTrackCandidateCollector & collector
+                          , cats_LayerNo_t minLength
+                          ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_track_candidate_excessive(_layers, minLength, _lastNMissing
                 , c_f_wrapper_collect, &collector);
         collector.done();
-        cats_cells_pool_reset(_layers, _cells, _softLimitCells);
+        _wasCollected = true;
     }
+
+    ///\brief Collects all track candidates permitted by the filter
+    ///
+    /// Forwards execution to `cats_for_each_track_candidate()` that might
+    /// be insufficient or excessive (see docs).
+    void collect( iTrackCandidateCollector & collector
+                , cats_LayerNo_t minLength
+                ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_track_candidate(_layers, minLength, _lastNMissing
+                , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+    ///\brief Collects all track candidates permitted by the weighted filter
+    ///
+    /// Forwards execution to `cats_for_each_track_candidate_w()` (see docs).
+    void collect( iTrackCandidateCollector & collector
+                , cats_LayerNo_t minLength
+                , iWeightedTripletFilter & wf
+                ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_track_candidate_w(_layers, minLength, _lastNMissing
+                , c_f_wrapper_wfilter, &wf
+                , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+    ///\brief Collects longest track candidates permitted by the filter
+    ///
+    /// Forwards execution to `cats_for_each_longest_track_candidate()` that
+    /// might be insufficient or imprecise (see docs).
+    void collect_longest( iTrackCandidateCollector & collector
+                        , cats_LayerNo_t minLength
+                        ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_longest_track_candidate(_layers, minLength, _lastNMissing
+                                             , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+        ///\brief Collects longest track candidates permitted by the filter
+    ///
+    /// Forwards execution to `cats_for_each_longest_track_candidate()` that
+    /// might be insufficient or imprecise (see docs).
+    void collect_longest( iTrackCandidateCollector & collector
+                        , cats_LayerNo_t minLength
+                        , iWeightedTripletFilter & wf
+                        ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_longest_track_candidate_w(_layers, minLength, _lastNMissing
+                    , c_f_wrapper_wfilter, &wf
+                    , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
     /// Drops associated hits
     void reset() {
+        cats_cells_pool_reset(_layers, _cells, _softLimitCells);
         _isFirstHit = true;
         cats_layers_reset(_layers, _softLimitHits);
         HitDataTraits<HitDataT>::reset(*this);
@@ -227,14 +325,25 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
                                          , cats_HitData_t c3
                                          , void * filter_
                                          ) {
-        // NOTE: it appears that resolving virtual ptr on vtable here drains
-        //       performance to significant extent.
-        return reinterpret_cast<typename TrackFinder<HitDataT>::iTripletFilter *>(filter_)
-            ->matches( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
-                     , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
-                     , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c3)
-                     ) ? 1 : 0;
-    }
+    return reinterpret_cast<typename TrackFinder<HitDataT>::iTripletFilter *>(filter_)
+        ->matches( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
+                 , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
+                 , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c3)
+                 ) ? 1 : 0;
+}
+
+template<typename HitDataT> double
+TrackFinder<HitDataT>::c_f_wrapper_wfilter( cats_HitData_t c1
+                                          , cats_HitData_t c2
+                                          , cats_HitData_t c3
+                                          , void * filter_
+                                         ) {
+    return reinterpret_cast<typename TrackFinder<HitDataT>::iWeightedTripletFilter *>(filter_)
+        ->weight( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
+                , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
+                , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c3)
+                );
+}
 
 /**\brief A collector shim filtering only longest unique hit sequences
  *
@@ -247,8 +356,7 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
  * In comparison with original DFS search proposed by CATS papers it shall
  * correctly identify the cases with doubling hits.
  *
- * \todo see note in `_eval_from()` function of `cats.c`; there is unresolved
- *       question on possible performance benefit
+ * \todo Remove, deprecated in favor of different strategies
  * */
 class LongestUniqueTrackCollector : public BaseTrackFinder::iTrackCandidateCollector {
 private:

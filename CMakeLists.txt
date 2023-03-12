@@ -37,13 +37,13 @@ find_package(ROOT COMPONENTS Core)
 if(ROOT_FOUND)
     include( ${ROOT_USE_FILE} )
 
-    add_executable( catsc-test main-gpl-test.cc )
+    add_executable( catsc-test test/main-gpl.cc )
     target_link_libraries( catsc-test ${catsc_LIB} ${ROOT_LIBRARIES} )
 
-    add_executable( catsc-test-mult main-gpl-test-mult.cc )
+    add_executable( catsc-test-mult test/main-gpl-mult.cc )
     target_link_libraries( catsc-test-mult ${catsc_LIB} ${ROOT_LIBRARIES} )
 
-    add_executable( catsc-test-hard main-test-hard.cc )
+    add_executable( catsc-test-hard test/main-hard.cc )
     target_link_libraries( catsc-test-hard ${catsc_LIB} ${ROOT_LIBRARIES} )
 
     #separate_arguments(ROOT_CXX_FLAGS_ UNIX_COMMAND ${ROOT_CXX_FLAGS})

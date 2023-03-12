@@ -15,6 +15,14 @@
  * to reveal all the implied chains.
  * */
 
+struct AppOpts {
+    long seed;  ///< seed, used for random fill
+    int nLayers;  ///< # of layers to fill
+    int nHitsPerLayer;  ///< # of layers to fill, used for random gen
+    int nMissedLayers;  ///< # of layers tolerable to miss
+    int minLength;  ///< min # of hits in track candidate
+};
+
 static void
 _usage_info(const char * appName, std::ostream & os) {
     os << "Usage:" << std::endl
@@ -149,29 +157,24 @@ Collector::collect( const cats_HitData_t * hits_
     }
 }
 
-int
-main(int argc, char * argv[]) {
-    if(argc != 6) {
-        _usage_info(argv[0], std::cerr);
-        return 1;
-    }
-    // set initial parameters
-    const int nLayers = std::stoi(argv[2])
-            , nHitsPerLayer = std::stoi(argv[3])
-            , nMissedLayers = std::stoi(argv[4])
-            , minLength = std::stoi(argv[5])
-            ;
+//                                                                  ___________
+// _______________________________________________________________/ Random gen
+
+static std::vector<HardLayer>
+_fill_random( CATSTrackFinder & cats
+            , unsigned long seed
+            , int nLayers
+            , int nHitsPerLayer
+            , int nMissedLayers
+            , int minLength
+            ) {
     // init random number generators
-    std::default_random_engine eng{std::stoul(argv[1])};
+    std::default_random_engine eng{seed};
     std::vector<HardLayer> layers;
     assert(nHitsPerLayer > 1);
     std::uniform_int_distribution<int> urd( nHitsPerLayer*.75
                                           , nHitsPerLayer*1.25
                                           );
-    // file to print out evaluation states, as JSON
-    FILE * debugJSONStream = fopen("debug.json", "w");
-    // Track finder instance to populate
-    CATSTrackFinder cats(nLayers, 1000, 10, 10, debugJSONStream);
     // generate "hard" hits topology
     for(int nLayer = 0; nLayer < nLayers; ++nLayer) {
         // number of hits per layer choosen randomly +/- 50% of base value
@@ -210,13 +213,139 @@ main(int argc, char * argv[]) {
             layers.back().insert(hit);
         }
     }
+    return layers;
+}
+
+//                                                             ________________
+// __________________________________________________________/ Hardcoded cases
+
+// This important test case imposes following graph:
+//
+//     == 0 == 1 == 2 ===== #4
+//       / \  / \  /
+//      | = 0 === 1 ======= #3
+//      |    \   /
+//     = \ === 0 ========== #2
+//        \   / <-------------- concurrent cells
+//     ==== 0 ============= #1
+//          |
+//     ==== 0 ============= #0
+//
+// Here one of the "hits" on 4th layer permits connection to "hit" on 1st layer.
+// Permitting up to 2 inefficeint layers and track candidates of min length 3
+// user code can prefer one of two options:
+//  1) Recieve all the combinations, including `{(0,0) (1,0) (4,0)}`
+//  2) Recieve only longest one, without `{(0,0) (1,0) (4,0)}`
+//  3) Receive either `{(0,0) (1,0) (4,0)}` or `{(0,0) (1,0) (2,0) (3,0) (4,0)}`
+//     depending on their weight (weighted filter is involved)
+// Original implementation considers only 3rd option, while for certain
+// tracking strategies it can be desirable to exploit 1st or 2nd options.
+
+static std::vector<HardLayer>
+_fill_case_1( CATSTrackFinder & cats, AppOpts & cfg ) {
+    std::vector<HardLayer> layers;
+
+    layers.push_back(HardLayer{});
+    auto hit00 = new HardHit(0, 0);
+    cats.add(0, hit00);
+    layers.back().insert(hit00);
+
+    layers.push_back(HardLayer{});
+    auto hit10 = new HardHit(1, 0);
+    cats.add(1, hit10);
+    hit10->insert(hit00);
+    layers.back().insert(hit10);
+
+    layers.push_back(HardLayer{});
+    auto hit20 = new HardHit(2, 0);
+    cats.add(2, hit20);
+    hit20->insert(hit10);
+    layers.back().insert(hit20);
+
+    layers.push_back(HardLayer{});
+    auto hit30 = new HardHit(3, 0);
+    cats.add(3, hit30);
+    auto hit31 = new HardHit(3, 1);
+    cats.add(3, hit31);
+    hit30->insert(hit20);
+    hit31->insert(hit20);
+    layers.back().insert(hit30);
+    layers.back().insert(hit31);
+
+    layers.push_back(HardLayer{});
+    auto hit40 = new HardHit(4, 0);
+    cats.add(4, hit40);
+    auto hit41 = new HardHit(4, 1);
+    cats.add(4, hit41);
+    auto hit42 = new HardHit(4, 2);
+    cats.add(4, hit42);
+    hit40->insert(hit30);
+    hit41->insert(hit30);
+    hit41->insert(hit31);
+    hit42->insert(hit31);
+    hit42->insert(hit10);
+    layers.back().insert(hit40);
+    layers.back().insert(hit41);
+    layers.back().insert(hit42);
+
+    cfg.nLayers = layers.size();
+    cfg.minLength = 3;
+    cfg.nMissedLayers = 2;
+
+    return layers;
+}
+
+//                      * * *   * * *   * * *
+
+//                                                             ________________
+// __________________________________________________________/ App entry point
+
+static int
+_configure_app( char * argv[], int argc, AppOpts & cfg ) {
+    if(argc == 2) {  // run hardcoded case
+    } else if(argc == 6) {
+        cfg.seed = std::stoul(argv[1]);
+        cfg.nLayers = std::stoi(argv[2]);
+        cfg.nHitsPerLayer = std::stoi(argv[3]);
+        cfg.nMissedLayers = std::stoi(argv[4]);
+        cfg.minLength = std::stoi(argv[5]);
+    }
+    return 0;
+}
+
+int
+main(int argc, char * argv[]) {
+    if(argc == 0) {
+        _usage_info(argv[0], std::cerr);
+        return 1;
+    }
+
+    AppOpts cfg;
+    _configure_app(argv, argc, cfg);
+
+    // file to print out evaluation states, as JSON
+    FILE * debugJSONStream = fopen("debug.json", "w");
+    // Track finder instance to populate
+    CATSTrackFinder cats(5/*cfg.nLayers*/, 1000, 10, 10, debugJSONStream);
+    //
+    #if 0
+    std::vector<HardLayer> layers = _fill_random( cats
+                , cfg.seed // seed
+                , cfg.nLayers  // nLayers
+                , cfg.nHitsPerLayer  // nHitsPerLayer
+                , cfg.nMissedLayers  // missed layers
+                , cfg.minLength  // min length
+                );
+    #else
+    auto layers = _fill_case_1(cats, cfg);
+    #endif
+    //
     Collector collector;
-    collector.prepare(layers, minLength);
+    collector.prepare(layers, cfg.minLength);
 
     HardFilter f;
-    //fputs("{\"iterations\":[", debugJSONStream);
-    cats.collect(f, collector, minLength, nMissedLayers);
-    //fputs("]}", debugJSONStream);
+    cats.evaluate(f, cfg.nMissedLayers);
+    cats.collect_excessive(collector, cfg.minLength);
 
     collector.dump(std::cout);  // XXX, initial state
 

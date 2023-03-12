@@ -157,7 +157,8 @@ main(int argc, char * argv[]) {
                       << cats.n_points(nLayer) << std::endl;
         }
 
-        cats.collect(filter, collector, minLength, nMissingLayers);
+        cats.evaluate(filter, nMissingLayers);
+        cats.collect(collector, minLength);
         cats.reset();
         std::cout << "event #" << nIt << " done." << std::endl;
     }
