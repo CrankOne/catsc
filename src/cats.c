@@ -509,6 +509,23 @@ struct PointsStack {
     ssize_t nTop;
 };
 
+#if 1  // TODO -DCOLLECTION_DSTACK_DEBUG
+static size_t _gRootLayerNo;
+static size_t _gRootNHit;
+static size_t _gRootNLink;
+static size_t _gRootNMaxLinks;
+static size_t _gDbgStack[256][3];
+
+static void _print_stack(size_t N) {
+    printf( "ROOT:%zu[%zu] (%zu/%zu)"
+          , _gRootLayerNo, _gRootNHit, _gRootNLink, _gRootNMaxLinks );
+    for(size_t i = 1; i < N; ++i) {
+        printf( " #%zu(%zu/%zu)", _gDbgStack[i][0], _gDbgStack[i][1], _gDbgStack[i][2] );
+    }
+    fputc('\n', stdout);
+}
+#endif
+
 void
 _stack_push( struct PointsStack * stack
            , cats_HitData_t datum ) {
@@ -542,7 +559,26 @@ _eval_from( struct Cell * cell
     _stack_push(stack, cell->from->data);
     if( 1 == cell->state && stack->nTop >= minLength ) {
         callback(stack->data, stack->nTop + 1, userdata);
+        #if 1  // TODO: -DCOLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
     } else {
+        #if 1
+        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
+                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
+                if( cell->state - neighb->state == expectedDiff ) {
+                    #if 1  // TODO: -DCOLLECTION_DSTACK_DEBUG
+                    _gDbgStack[stack->nTop][0] = expectedDiff;
+                    _gDbgStack[stack->nTop][1] = nNeighb;
+                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
+                    #endif
+                    assert( neighb->to == cell->from );
+                    _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
+                }
+            }
+        }
+        #else
         for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
             struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
             if( cell->state - neighb->state <= nMissingLayers + 1 ) {
@@ -561,6 +597,7 @@ _eval_from( struct Cell * cell
                 _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
             }
         }
+        #endif
     }
     #ifdef NDEBUG
     _stack_pull(stack);
@@ -588,6 +625,12 @@ cats_for_each_track_candidate( struct cats_Layers * ls
             struct cats_Point * ptStart = l->points + nHit;
             _stack_push(&stack, ptStart->data);
             for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                #if 1  // TODO -DCOLLECTION_DSTACK_DEBUG
+                _gRootLayerNo = nLayer;
+                _gRootNHit = nHit;
+                _gRootNLink = nLink;
+                _gRootNMaxLinks = ptStart->refs.nUsed;
+                #endif
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
                 // use `doAdvance' flag to mark visited cells
