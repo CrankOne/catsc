@@ -20,6 +20,14 @@ BaseTrackFinder::c_f_wrapper_collect( const cats_HitData_t * hitIDs, size_t nHit
 // An utility class to provide "longest unique" sequences
 
 void
+LongestUniqueTrackCollector::done() {
+    for(const auto & c : _collectedData) {
+        _consider_track_candidate(c.data(), c.size());
+    }
+}
+
+
+void
 LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs) {
     std::set<cats_HitData_t> newSet(hits, hits + nHitIDs);
     assert(!newSet.empty());
@@ -40,13 +48,16 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
                 isSubset = false;
                 break;
             }
-            if(isSubset) return;  // new is a subset, ignore
+            if(isSubset) {
+                return;  // new is a subset, ignore
+            }
         } else if( cSet.size() < newSet.size() ) {
             // current set is smaller than new -- check if current is a subset
             // and substitute current for new
             bool isSubset = true;
             for(auto curEl : cSet) {
                 if( newSet.find(curEl) != newSet.end() ) continue;
+                // current set contains at least one distinct element
                 isSubset = false;
                 break;
             }
@@ -75,14 +86,8 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
     // as a track candidate
     _collected.push_back(newSet);
     //_consider_track_candidate(hits, nHitIDs);
-    _collectedData.push_back({hits, hits + nHitIDs});
-}
-
-void
-LongestUniqueTrackCollector::done() {
-    for(const auto & c : _collectedData) {
-        _consider_track_candidate(c.data(), c.size());
-    }
+    _collectedData.push_back(std::vector<cats_HitData_t>(hits, hits + nHitIDs));
+    assert(_collectedData.back().size() == nHitIDs);
 }
 
 }  // namespace catsc

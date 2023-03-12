@@ -126,10 +126,10 @@ protected:
                        , nMissingLayers
                        , _debugJSONStream
                        ) ) {
-            fputs("]}", _debugJSONStream);
+            if(_debugJSONStream) fputs("]}", _debugJSONStream);
             throw std::bad_alloc();
         }
-        fputs("]}", _debugJSONStream);
+        if(_debugJSONStream) fputs("]}", _debugJSONStream);
         _evaluated = true;
     }
 public:
@@ -268,6 +268,7 @@ public:
     /// candidates being already considered
     virtual void reset() {
         _collected.clear();
+        _collectedData.clear();
     }
 };
 
