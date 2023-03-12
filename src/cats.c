@@ -907,8 +907,6 @@ cats_for_each_winning_track_candidate( struct cats_Layers * ls
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
                 // use `doAdvance' flag to mark visited cells
-                printf( "xxx %d,%d --%p--> : visited=%d\n"                          // XXX
-                      , (int) nLayer, (int) nHit, cell, (int) cell->doAdvance);   // XXX
                 if(cell->doAdvance) continue;  // omit "visited"
                 #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
                 _gRootLayerNo = nLayer;
