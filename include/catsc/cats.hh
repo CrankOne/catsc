@@ -292,7 +292,7 @@ public:
 
         ///\brief Collects longest track candidates permitted by the filter
     ///
-    /// Forwards execution to `cats_for_each_longest_track_candidate()` that
+    /// Forwards execution to `cats_for_each_longest_track_candidate_w()` that
     /// might be insufficient or imprecise (see docs).
     void collect_longest( iTrackCandidateCollector & collector
                         , cats_LayerNo_t minLength
@@ -303,6 +303,40 @@ public:
         if(_wasCollected)
             _reset_collection_flags();
         cats_for_each_longest_track_candidate_w(_layers, minLength, _lastNMissing
+                    , c_f_wrapper_wfilter, &wf
+                    , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+    ///\brief Collects winning track candidates permitted by the filter
+    ///
+    /// Forwards execution to `cats_for_each_winning_track_candidate()` that
+    /// might be insufficient or imprecise (see docs).
+    void collect_winning( iTrackCandidateCollector & collector
+                        , cats_LayerNo_t minLength
+                        ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_winning_track_candidate(_layers, minLength, _lastNMissing
+                                             , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+    ///\brief Collects winning track candidates permitted by the weighted filter
+    ///
+    /// Forwards execution to `cats_for_each_winning_track_candidate_w()` that
+    /// might be insufficient or imprecise (see docs).
+    void collect_winning( iTrackCandidateCollector & collector
+                        , cats_LayerNo_t minLength
+                        , iWeightedTripletFilter & wf
+                        ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_winning_track_candidate_w(_layers, minLength, _lastNMissing
                     , c_f_wrapper_wfilter, &wf
                     , c_f_wrapper_collect, &collector);
         collector.done();

@@ -758,6 +758,12 @@ _eval_from_l( struct Cell * cell
             }
         }
     }
+    //if( stack->nTop >= minLength ) {
+    //    callback(stack->data, stack->nTop + 1, userdata);
+    //    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+    //    _print_stack(stack->nTop + 1);
+    //    #endif
+    //}
     #ifdef NDEBUG
     _stack_pull(stack);
     #else
@@ -796,6 +802,123 @@ cats_for_each_longest_track_candidate( struct cats_Layers * ls
                 #endif
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
                 _eval_from_l(cell, &stack, callback, userdata, nMissingLayers, minLength);
+            }
+            #ifdef NDEBUG
+            _stack_pull(&stack);
+            #else
+            assert(_stack_pull(&stack) == ptStart->data);
+            #endif
+        }
+    }
+    free(stack.data);
+}
+
+/*                          * * *   * * *   * * *                            */
+
+static int
+_eval_from_winning_l( struct Cell * cell
+                    , struct PointsStack * stack
+                    , void (*callback)(const cats_HitData_t *, size_t, void *)
+                    , void * userdata
+                    , unsigned int nMissingLayers
+                    , unsigned int minLength
+                    ) {
+    assert(_stack_top(stack) == cell->to->data);
+    _stack_push(stack, cell->from->data);
+    if( 1 == cell->state && stack->nTop >= minLength ) {
+        callback(stack->data, stack->nTop + 1, userdata);
+        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
+        #ifdef NDEBUG
+        _stack_pull(stack);
+        #else
+        assert(_stack_pull(stack) == cell->from->data);
+        #endif
+        cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
+        return 1;
+    } else {
+        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
+                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
+                if( neighb->doAdvance ) continue;  /* omit visited ("removed") */
+                if( cell->state - neighb->state == expectedDiff ) {
+                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                    _gDbgStack[stack->nTop][0] = expectedDiff;
+                    _gDbgStack[stack->nTop][1] = nNeighb;
+                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
+                    #endif
+                    assert( neighb->to == cell->from );
+                    int won = _eval_from_winning_l(neighb, stack, callback,
+                                userdata, nMissingLayers, minLength);
+                    if(won) {
+                        cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
+                        #ifdef NDEBUG
+                        _stack_pull(stack);
+                        #else
+                        assert(_stack_pull(stack) == cell->from->data);
+                        #endif
+                        return won;
+                    }
+                }
+            }
+        }
+    }
+    if( stack->nTop >= minLength ) {
+        callback(stack->data, stack->nTop + 1, userdata);
+        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
+        #ifdef NDEBUG
+        _stack_pull(stack);
+        #else
+        assert(_stack_pull(stack) == cell->from->data);
+        #endif
+        cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
+        return 1;
+    }
+    #ifdef NDEBUG
+    _stack_pull(stack);
+    #else
+    assert(_stack_pull(stack) == cell->from->data);
+    #endif
+    return 0;
+}
+
+void
+cats_for_each_winning_track_candidate( struct cats_Layers * ls
+                                     , unsigned int minLength
+                                     , unsigned int nMissingLayers
+                                     , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                     , void * userdata
+                                     ) {
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+    /* evaluate traversing */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+            struct cats_Point * ptStart = l->points + nHit;
+            _stack_push(&stack, ptStart->data);
+            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                struct Cell * cell = ptStart->refs.cells[nLink];
+                if(cell->state < minLength) continue;
+                // use `doAdvance' flag to mark visited cells
+                printf( "xxx %d,%d --%p--> : visited=%d\n"                          // XXX
+                      , (int) nLayer, (int) nHit, cell, (int) cell->doAdvance);   // XXX
+                if(cell->doAdvance) continue;  // omit "visited"
+                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                _gRootLayerNo = nLayer;
+                _gRootNHit = nHit;
+                _gRootNLink = nLink;
+                _gRootNMaxLinks = ptStart->refs.nUsed;
+                #endif
+                assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
+                /*int won =*/ _eval_from_winning_l( cell, &stack, callback
+                        , userdata, nMissingLayers, minLength);
             }
             #ifdef NDEBUG
             _stack_pull(&stack);
@@ -908,6 +1031,8 @@ cats_for_each_track_candidate_w( struct cats_Layers * ls
     free(stack.data);
 }
 
+/*                          * * *   * * *   * * *                            */
+
 static void
 _eval_from_w_longest( struct Cell * cell
                     , struct PointsStack * stack
@@ -997,6 +1122,137 @@ cats_for_each_longest_track_candidate_w( struct cats_Layers * ls
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
                 _eval_from_w_longest(cell, &stack, wf, wfData, callback
                         , userdataCollect, nMissingLayers, minLength);
+            }
+            #ifdef NDEBUG
+            _stack_pull(&stack);
+            #else
+            assert(_stack_pull(&stack) == ptStart->data);
+            #endif
+        }
+    }
+    free(stack.data);
+}
+
+/*                          * * *   * * *   * * *                            */
+
+static int
+_eval_from_w_winning( struct Cell * cell
+                    , struct PointsStack * stack
+                    , cats_WeightedFilter_t wf
+                    , void * userdataFilter
+                    , void (*callback)(const cats_HitData_t *, size_t, void *)
+                    , void * userdata
+                    , unsigned int nMissingLayers
+                    , unsigned int minLength
+                    ) {
+    assert(_stack_top(stack) == cell->to->data);
+    cell->doAdvance = 1;
+    _stack_push(stack, cell->from->data);
+    if( 1 == cell->state && stack->nTop >= minLength ) {
+        callback(stack->data, stack->nTop + 1, userdata);
+        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
+        #ifdef NDEBUG
+        _stack_pull(stack);
+        #else
+        assert(_stack_pull(stack) == cell->from->data);
+        #endif
+        return 1;
+    } else {
+        /* Find out best link among concurrent ones for all depth */
+        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+            double bestWeight = DBL_MIN;
+            struct Cell * bestCell = NULL;
+            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
+                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
+                assert(stack->nTop > -1);
+                double w = wf( stack->data[stack->nTop]
+                             , neighb->from->data
+                             , neighb->to->data
+                             , userdataFilter );
+                if( w > bestWeight ) {
+                    bestWeight = w;
+                    bestCell = neighb;
+                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                    _gDbgStack[stack->nTop][0] = expectedDiff;
+                    _gDbgStack[stack->nTop][1] = nNeighb;
+                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
+                    #endif
+                }
+            }
+            /* Proceed with winner at current depth */
+            if(bestCell) {
+                assert( bestCell->to == cell->from );
+                int won = _eval_from_w_winning( bestCell, stack, wf, userdataFilter
+                                              , callback, userdata, nMissingLayers, minLength);
+                if(won) {
+                    #ifdef NDEBUG
+                    _stack_pull(stack);
+                    #else
+                    assert(_stack_pull(stack) == cell->from->data);
+                    #endif
+                    return won;
+                }
+            }
+        }
+    }
+    if( stack->nTop >= minLength ) {
+        callback(stack->data, stack->nTop + 1, userdata);
+        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
+        #ifdef NDEBUG
+        _stack_pull(stack);
+        #else
+        assert(_stack_pull(stack) == cell->from->data);
+        #endif
+        cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
+        return 1;
+    }
+    #ifdef NDEBUG
+    _stack_pull(stack);
+    #else
+    assert(_stack_pull(stack) == cell->from->data);
+    #endif
+    return 0;
+}
+
+void
+cats_for_each_winning_track_candidate_w( struct cats_Layers * ls
+                                       , unsigned int minLength
+                                       , unsigned int nMissingLayers
+                                       , cats_WeightedFilter_t wf
+                                       , void * wfData
+                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                       , void * userdataCollect
+                                       ) {
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+    /* evaluate traversing */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+            struct cats_Point * ptStart = l->points + nHit;
+            _stack_push(&stack, ptStart->data);
+            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                _gRootLayerNo = nLayer;
+                _gRootNHit = nHit;
+                _gRootNLink = nLink;
+                _gRootNMaxLinks = ptStart->refs.nUsed;
+                #endif
+                struct Cell * cell = ptStart->refs.cells[nLink];
+                if(cell->state < minLength) continue;
+                // use `doAdvance' flag to mark visited cells
+                if(cell->doAdvance) continue;  // "visited"
+                assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
+                int won = _eval_from_w_winning( cell, &stack, wf, wfData, callback
+                                              , userdataCollect, nMissingLayers, minLength);
+                if(won) break;
             }
             #ifdef NDEBUG
             _stack_pull(&stack);

@@ -147,7 +147,7 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
  *
  * This is collecting routine will invoke given callback on each found track
  * candidate, including sub-sequences when they are permitted by non-weighted
- * geometrical filter, omitting their sub-sequences. Hit insertion order
+ * geometrical filter. Hit insertion order
  * affects determinism: combinations corresponging to hits inserted first will
  * be considered first.
  *
@@ -176,9 +176,34 @@ cats_for_each_track_candidate( struct cats_Layers * ls
  * pile-up concurrency. Since it does not need the weighted filter, this case
  * can be still preferrable for tracking being sparse enough for some strict
  * yet efficient geometrical filter.
+ *
+ * \todo Has an issue of doubling endings; currently can be mitigated with
+ *       `LongestUniqueTrackCollector`, but has to be fixed with introducing
+ *       "visited" flag per hit
  * */
 void
 cats_for_each_longest_track_candidate( struct cats_Layers * ls
+                                     , unsigned int minLength
+                                     , unsigned int nMissingLayers
+                                     , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                     , void * userdata
+                                     );
+
+/**\brief Iterates over resulting connection graph visiting enumerated
+ *        subsets, preferring longest sequences, by hit insertion order.
+ *
+ * This routine will traverse connection graph preferring longest sequences
+ * over shorter ones (yet, still permitted by the unweighted geometrical
+ * filter). For concurrent tracks, a hit inserted first will be preferred.
+ * Comparing to `cats_for_each_longest_track_candidate()` does not repeat
+ * sub-sequences.
+ *
+ * Use case is similar to `cats_for_each_longest_track_candidate()`, but for
+ * elaborated tracking procedures capable to combine tracklets from
+ * reconstructed segments.
+ * */
+void
+cats_for_each_winning_track_candidate( struct cats_Layers * ls
                                      , unsigned int minLength
                                      , unsigned int nMissingLayers
                                      , void (*callback)(const cats_HitData_t *, size_t, void *)
@@ -219,6 +244,30 @@ cats_for_each_track_candidate_w( struct cats_Layers * ls
  * */
 void
 cats_for_each_longest_track_candidate_w( struct cats_Layers * ls
+                                       , unsigned int minLength
+                                       , unsigned int nMissingLayers
+                                       , cats_WeightedFilter_t
+                                       , void * userdataFilter
+                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                       , void * userdataCollect
+                                       );
+
+/**\brief Iterates over resulting graph, picking up longest weighted
+ *        connections, never passing through the same segments twice
+ *
+ * Concurrent cells will be resolved in favor of the best among closest ones,
+ * according to weighting function. If two weights are the same, first inserted
+ * is preferred. Hit insertion order should not affect determinism. This
+ * implementation follows `winner takes all` rule, producing candidates without
+ * shared segments which can hide pile-up events, yet providing best possible
+ * combinatorial reduction.
+ *
+ * Effectively reduces combinatorics, yet loses some candidates with
+ * systematically loose weight (e.g. misaligned ones). This collecting routine
+ * is preferred for systems with low redundancy on moderate occuancies.
+ * */
+void
+cats_for_each_winning_track_candidate_w( struct cats_Layers * ls
                                        , unsigned int minLength
                                        , unsigned int nMissingLayers
                                        , cats_WeightedFilter_t

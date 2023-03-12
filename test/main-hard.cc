@@ -220,7 +220,8 @@ _fill_random( CATSTrackFinder & cats
 // __________________________________________________________/ Hardcoded cases
 
 // This important test case imposes following graph:
-//
+//     == 0 ======= 1 ===== #5
+//        |         |
 //     == 0 == 1 == 2 ===== #4
 //       / \  / \  /
 //      | = 0 === 1 ======= #3
@@ -280,16 +281,26 @@ _fill_case_1( CATSTrackFinder & cats, AppOpts & cfg ) {
     auto hit42 = new HardHit(4, 2);
     cats.add(4, hit42);
     hit40->insert(hit30);
+    hit40->insert(hit10);
     hit41->insert(hit30);
     hit41->insert(hit31);
     hit42->insert(hit31);
-    hit42->insert(hit10);
     layers.back().insert(hit40);
     layers.back().insert(hit41);
     layers.back().insert(hit42);
 
+    layers.push_back(HardLayer{});
+    auto hit50 = new HardHit(5, 0);
+    cats.add(5, hit50);
+    auto hit51 = new HardHit(5, 1);
+    cats.add(5, hit51);
+    hit50->insert(hit40);
+    hit51->insert(hit42);
+    layers.back().insert(hit50);
+    layers.back().insert(hit51);
+
     cfg.nLayers = layers.size();
-    cfg.minLength = 3;
+    cfg.minLength = 4;
     cfg.nMissedLayers = 2;
 
     return layers;
@@ -326,7 +337,7 @@ main(int argc, char * argv[]) {
     // file to print out evaluation states, as JSON
     FILE * debugJSONStream = fopen("debug.json", "w");
     // Track finder instance to populate
-    CATSTrackFinder cats(5/*cfg.nLayers*/, 1000, 10, 10, debugJSONStream);
+    CATSTrackFinder cats(6/*cfg.nLayers*/, 1000, 10, 10, debugJSONStream);
     //
     #if 0
     std::vector<HardLayer> layers = _fill_random( cats
@@ -345,7 +356,7 @@ main(int argc, char * argv[]) {
 
     HardFilter f;
     cats.evaluate(f, cfg.nMissedLayers);
-    cats.collect_excessive(collector, cfg.minLength);
+    cats.collect_winning(collector, cfg.minLength);
 
     collector.dump(std::cout);  // XXX, initial state
 
