@@ -753,7 +753,7 @@ _eval_from_l( struct Cell * cell
                     _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
                     #endif
                     assert( neighb->to == cell->from );
-                    _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
+                    _eval_from_l(neighb, stack, callback, userdata, nMissingLayers, minLength);
                 }
             }
         }
