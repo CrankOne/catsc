@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <cassert>
 
+#include <iostream>  // XXX
+
 namespace catsc {
 
 /// Not for direct use; provides C function to be used in template and
@@ -134,23 +136,40 @@ private:
     /// Internal flag set after `collect()` call; used to re-set internal flags
     /// before possible repeatative `collect()` calls
     bool _wasCollected;
+    /// Last return code of C procedure
+    int _rc;
 protected:
     /// Evaluates the automaton.
     ///
     /// \throw `std::bad_alloc` on memory error
-    void _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
+    bool _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
         if( _debugJSONStream ) fputs("},\"its\":[", _debugJSONStream);
-        if( cats_evolve( _layers, _cells
-                       , TrackFinder<HitDataT>::c_f_wrapper_filter
-                       , &filter
-                       , nMissingLayers
-                       , _debugJSONStream
-                       ) ) {
+        if(!!(_rc = cats_evaluate( _layers, _cells
+                                 , TrackFinder<HitDataT>::c_f_wrapper_filter
+                                 , &filter
+                                 , nMissingLayers
+                                 , _debugJSONStream
+                                 )) ) {
             if(_debugJSONStream) fputs("]}", _debugJSONStream);
-            throw std::bad_alloc();
+            if(_rc == CATSC_RC_EMPTY_GRAPH ) {
+                if(_debugJSONStream) fputs("]}", _debugJSONStream);
+                _evaluated = true;
+                return false;  // filter discriminated all
+            }
+            if(!(_rc & CATSC_ERROR_RUNTIME_LOGIC)) {
+                throw std::bad_alloc();
+            } else {
+                char errBf[64];
+                snprintf( errBf, sizeof(errBf), "CATS(C) runtime error: %#x."
+                        , _rc);
+                throw std::runtime_error(errBf);
+                // ^^^ TODO: verbose descriptions/dedicated exceptions for
+                //     error codes
+            }
         }
         if(_debugJSONStream) fputs("]}", _debugJSONStream);
         _evaluated = true;
+        return true;
     }
 
     ///\brief Must be called before repeatative `collect()` calls
@@ -172,14 +191,15 @@ public:
                      , _evaluated(false)
                      , _debugJSONStream(debugJSONStream)
                      , _isFirstHit(true)
+                     , _rc(0)
                      {
         if( nLayers < 3 ) {
             throw std::runtime_error("Bad number of layers requested (<3).");
         }
         _layers = cats_layers_create(nLayers);
-        if(!_layers) throw std::bad_alloc();
+        if(!_layers) throw std::bad_alloc();  // failed to allocate layers
         _cells = cats_cells_pool_create(nLayers);
-        if(!_cells) throw std::bad_alloc();
+        if(!_cells) throw std::bad_alloc();  // failed to allocate cells pool
         if( _debugJSONStream ) fputs("{\"dict\":{", _debugJSONStream);
     }
     /// dtr, pretty strightforward one.
@@ -187,6 +207,8 @@ public:
         cats_layers_delete(_layers);
         cats_cells_pool_delete(_cells);
     }
+
+    const int c_retcode() const { return _rc; }
 
     /// Adds point (a hit) to be considered on certain layer
     ///
@@ -204,7 +226,7 @@ public:
             int nHit = cats_layer_n_points(_layers, nLayer);
             fprintf( _debugJSONStream
                    , "\"%p\":\"(%d,%d)\""
-                   , p, nLayer, nHit );
+                   , p, nLayer, nHit - 1 );
         }
     }
 
@@ -215,12 +237,12 @@ public:
     size_t n_points(cats_LayerNo_t nLayer) { return cats_layer_n_points(_layers, nLayer); }
 
     /// Evaluates automaton; prepares connection graph for track collection
-    void evaluate( iTripletFilter & filter
+    bool evaluate( iTripletFilter & filter
                  , cats_LayerNo_t nMissingLayers ) {
         if(_evaluated)
             throw std::runtime_error("CATS already evaluated");
         _lastNMissing = nMissingLayers;
-        _evaluate(filter, _lastNMissing);
+        return _evaluate(filter, _lastNMissing);
     }
 
     ///\brief Collects all track candidates permitted by the filter, including

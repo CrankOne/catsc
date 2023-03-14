@@ -9,6 +9,16 @@
 extern "C" {
 #endif
 
+#define CATSC_ERROR_ALLOC_FAILURE_BACKREF_COUNTER    0x1  /* backref counter exceeded */
+#define CATSC_ERROR_ALLOC_FAILURE_BACKREF            0x2  /* backref instance allocation failure */
+#define CATSC_ERROR_ALLOC_FAILURE_POINTS_COUNTER     0x3  /* pointer counter on layer exceeded */
+#define CATSC_ERROR_ALLOC_FAILURE_POINTS             0x4  /* pointer instance allocation failed */
+#define CATSC_ERROR_ALLOC_FAILURE_CELLS              0x5  /* failed to (re)allocate cells */
+#define CATSC_ERROR_RUNTIME_LOGIC                   0x10  /* runtime error flag */
+#define CATSC_RC_NO_SUCH_LAYER                      0x11  /* No layer of given number */
+#define CATSC_RC_EMPTY_GRAPH                        0x12  /* Graph has no connections (not actually erorr) */
+#define CATSC_RC_BAD_LAYERS_NO                      0x13  /* Layers number is too small */
+
 #ifndef CATS_HIT_DATA_TYPE
 #   define CATS_HIT_DATA_TYPE const void*
 #endif
@@ -104,13 +114,13 @@ void cats_cells_pool_reset( struct cats_Layers *
  * \returns -101 at cell (link b/w hits) allocation failure.
  * \returns -102 at cell neighbor reference allocation failure.
  * */
-int cats_evolve( struct cats_Layers *
-               , struct cats_CellsPool *
-               , cats_Filter_t test_triplet
-               , void * userData
-               , unsigned int nMissingLayers
-               , FILE * debugJSONStream
-               );
+int cats_evaluate( struct cats_Layers *
+                 , struct cats_CellsPool *
+                 , cats_Filter_t test_triplet
+                 , void * userData
+                 , unsigned int nMissingLayers
+                 , FILE * debugJSONStream
+                 );
 
 /**\brief Re-sets "visited" flags after previous `collect()` call
  *

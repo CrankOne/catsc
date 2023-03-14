@@ -18,7 +18,7 @@ def print_graphviz(f, d, l):
                 state = link['state']
                 links[(kFrom, kTo)] = state
     # ---
-    f.write('digraph G {\nsplines="false"\n')  # "    splines = false;\n"
+    f.write('digraph G {\n')  # "    splines = false;\n"
     byLayers = defaultdict(list)
     # put basic connections
     for ptr, item in d.items():

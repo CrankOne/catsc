@@ -19,6 +19,8 @@
 #   define CATSC_WEIGHTS_POOL_STRIDE 64
 #endif
 
+/*#define COLLECTION_DSTACK_DEBUG 1*/
+
 /* FWD */
 struct Cell;
 
@@ -41,7 +43,7 @@ static int
 _cell_refs_add( struct CellRefs * ptr, struct Cell * cellPtr ) {
     if( ptr->nUsed + 1 > ptr->nAllocated ) {
         if( SIZE_MAX - CATS_BACKREF_REALLOC_STRIDE <= ptr->nAllocated ) {
-            return -1;
+            return CATSC_ERROR_ALLOC_FAILURE_BACKREF_COUNTER;
         }
         ptr->nAllocated += CATS_BACKREF_REALLOC_STRIDE;
         struct Cell ** newBackRefs
@@ -49,7 +51,7 @@ _cell_refs_add( struct CellRefs * ptr, struct Cell * cellPtr ) {
                                       , ptr->nAllocated * sizeof(struct Cell *) );
         if(!newBackRefs) {
             ptr->nAllocated -= CATS_BACKREF_REALLOC_STRIDE;
-            return -2;
+            return CATSC_ERROR_ALLOC_FAILURE_BACKREF;
         }
         ptr->cells = newBackRefs;
     }
@@ -117,13 +119,16 @@ _layer_add_point( struct Layer * l
                 , cats_HitData_t data
                 ) {
     if( l->nPointsUsed + 1 > l->nPointsAllocated ) {
+        if(SIZE_MAX - CATS_NPOINTS_REALLOC_STRIDE < l->nPointsAllocated) {
+            return CATSC_ERROR_ALLOC_FAILURE_POINTS_COUNTER;
+        }
         l->nPointsAllocated += CATS_NPOINTS_REALLOC_STRIDE;
         struct cats_Point * newPoints
             = (struct cats_Point *) realloc(l->points, l->nPointsAllocated * sizeof(struct cats_Point));
         if( !newPoints ) {
             /* failed to allocate space */
             l->nPointsAllocated -= CATS_NPOINTS_REALLOC_STRIDE;
-            return -2;
+            return CATSC_ERROR_ALLOC_FAILURE_POINTS;
         }
         l->points = newPoints;
         /* init point's cell references for newly allocated point */
@@ -195,7 +200,7 @@ cats_layer_add_point( struct cats_Layers * lsPtr
                     ) {
     assert(lsPtr);
     assert(lsPtr->layers);
-    if(layerNo >= lsPtr->nLayers) return -1;
+    if(layerNo >= lsPtr->nLayers) return CATSC_RC_NO_SUCH_LAYER;
     struct Layer * l = lsPtr->layers + layerNo;
     return _layer_add_point( l, datum );
 }
@@ -299,10 +304,9 @@ cats_dump_json( struct cats_Layers * layers
 
 struct cats_CellsPool *
 cats_cells_pool_create(cats_LayerNo_t nLayers) {
-    const size_t nDoubletsGroups = nLayers - 1;
     struct cats_CellsPool * a
         = (struct cats_CellsPool *) malloc(sizeof(struct cats_CellsPool));
-
+    if(!a) return NULL;
     a->pool = NULL;
     a->nCellsUsed = a->nCellsAllocated = 0;
 
@@ -358,7 +362,10 @@ _connect_layers( struct Cell * cCell
                , struct Layer * toLayer
                , cats_Filter_t test_triplet
                , void * userData
+               , int * catscErrNo
                ) {
+    assert(cCell);
+    assert(catscErrNo);
     /* build the cells as cartesian product */
     for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
         struct cats_Point * fromHit = fromLayer->points + fromNHit;
@@ -381,13 +388,13 @@ _connect_layers( struct Cell * cCell
                                , toHit->data
                                , userData
                                )) {
-                    if(_cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]) < 0) {
+                    if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]))) {
                         return NULL;
                     }
                 }
             }
             /* Unconditionally append to-hit refs */
-            if( _cell_refs_add(&toHit->refs, cCell) < 0 ) {
+            if(!!(*catscErrNo = _cell_refs_add(&toHit->refs, cCell))) {
                 return NULL;
             }
             ++cCell;
@@ -408,15 +415,16 @@ _advance_cell_state_if_need(struct Cell * cellPtr) {
 }
 
 int
-cats_evolve( struct cats_Layers * ls
-           , struct cats_CellsPool * a
-           , cats_Filter_t test_triplet
-           , void * userData
-           , unsigned int nMissingLayers
-           , FILE * debugJSONStream
-           ) {
+cats_evaluate( struct cats_Layers * ls
+             , struct cats_CellsPool * a
+             , cats_Filter_t test_triplet
+             , void * userData
+             , unsigned int nMissingLayers
+             , FILE * debugJSONStream
+             ) {
     assert(ls);
     assert(a);
+    assert(ls->nLayers > 2);
     /* Estimated number of cells needed */
     size_t nCellsNeed = 0;
     for( cats_LayerNo_t fromNLayer = 0
@@ -430,13 +438,15 @@ cats_evolve( struct cats_Layers * ls
                         ;
         }
     }
+    if(0 == nCellsNeed)
+        return CATSC_RC_EMPTY_GRAPH;
     /* (re)allocate/assure required number of cells available */
     if(a->nCellsAllocated < nCellsNeed) {
         cats_cells_pool_reset(ls, a, 0);
         struct Cell * newCells
             = (struct Cell *) realloc( a->pool
                                      , nCellsNeed * sizeof(struct Cell) );
-        if( !newCells ) return -101;
+        if( !newCells ) return CATSC_ERROR_ALLOC_FAILURE_CELLS;
         a->pool = newCells;
         /* initialize newly allocated cells for use */
         for( size_t nCell = a->nCellsAllocated
@@ -454,14 +464,19 @@ cats_evolve( struct cats_Layers * ls
         for( cats_LayerNo_t toNLayer = fromNLayer + 1
            ; toNLayer < fromNLayer + 2 + nMissingLayers && toNLayer < ls->nLayers
            ; ++toNLayer ) {
+            int rc = 0;
             /* Create cells connecting this layer pair */
             cCell = _connect_layers( cCell
                                    , ls->layers + fromNLayer
                                    , ls->layers + toNLayer
                                    , test_triplet
                                    , userData
+                                   , &rc
                                    );
-            if(NULL == cCell) return -102;
+            if(NULL == cCell) {
+                assert(rc);
+                return rc;
+            }
         }
     }
     /* Evaluate: iterate over cells interfacing the layer 2, 3... and
@@ -556,22 +571,22 @@ _stack_pull( struct PointsStack * stack ) {
 /*                          * * *   * * *   * * *                            */
 
 static void
-_eval_from_esxcessive( struct Cell * cell
+_eval_from_excessive( struct Cell * cell
                      , struct PointsStack * stack
                      , void (*callback)(const cats_HitData_t *, size_t, void *)
                      , void * userdata
-                     , unsigned int nMissingLayers
                      , unsigned int minLength
                      ) {
     assert(_stack_top(stack) == cell->to->data);
     _stack_push(stack, cell->from->data);
-    if( 1 == cell->state && stack->nTop >= minLength ) {
+    if( 1 == cell->state  // ? 0 == cell->leftNeighbours.nUsed
+     && stack->nTop >= minLength ) {
         callback(stack->data, stack->nTop + 1, userdata);
         #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
         _print_stack(stack->nTop + 1);
         #endif
     } else {
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+        for(size_t expectedDiff = 1; expectedDiff < cell->state; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
                 struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
                 if( cell->state - neighb->state == expectedDiff ) {
@@ -581,7 +596,7 @@ _eval_from_esxcessive( struct Cell * cell
                     _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
                     #endif
                     assert( neighb->to == cell->from );
-                    _eval_from_esxcessive(neighb, stack, callback, userdata, nMissingLayers, minLength);
+                    _eval_from_excessive(neighb, stack, callback, userdata, minLength);
                 }
             }
         }
@@ -596,7 +611,7 @@ _eval_from_esxcessive( struct Cell * cell
 void
 cats_for_each_track_candidate_excessive( struct cats_Layers * ls
                                        , unsigned int minLength
-                                       , unsigned int nMissingLayers
+                                       , unsigned int nMissingLayers  // xxx
                                        , void (*callback)(const cats_HitData_t *, size_t, void *)
                                        , void * userdata
                                        ) {
@@ -621,7 +636,7 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from_esxcessive(cell, &stack, callback, userdata, nMissingLayers, minLength);
+                _eval_from_excessive(cell, &stack, callback, userdata, minLength);
             }
             #ifdef NDEBUG
             _stack_pull(&stack);
@@ -647,7 +662,6 @@ _eval_from( struct Cell * cell
           , struct PointsStack * stack
           , void (*callback)(const cats_HitData_t *, size_t, void *)
           , void * userdata
-          , unsigned int nMissingLayers
           , unsigned int minLength
           ) {
     assert(_stack_top(stack) == cell->to->data);
@@ -659,7 +673,7 @@ _eval_from( struct Cell * cell
         _print_stack(stack->nTop + 1);
         #endif
     } else {
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+        for(size_t expectedDiff = 1; expectedDiff < cell->state; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
                 struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
                 if( cell->state - neighb->state == expectedDiff ) {
@@ -669,7 +683,7 @@ _eval_from( struct Cell * cell
                     _gDbgStack[stack->nTop][1] = nNeighb;
                     _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
                     #endif
-                    _eval_from(neighb, stack, callback, userdata, nMissingLayers, minLength);
+                    _eval_from(neighb, stack, callback, userdata, minLength);
                 }
             }
         }
@@ -684,7 +698,6 @@ _eval_from( struct Cell * cell
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
-                             , unsigned int nMissingLayers
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              ) {
@@ -711,7 +724,7 @@ cats_for_each_track_candidate( struct cats_Layers * ls
                 _gRootNMaxLinks = ptStart->refs.nUsed;
                 #endif
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from(cell, &stack, callback, userdata, nMissingLayers, minLength);
+                _eval_from(cell, &stack, callback, userdata, minLength);
             }
             #ifdef NDEBUG
             _stack_pull(&stack);
@@ -742,7 +755,7 @@ _eval_from_l( struct Cell * cell
         _print_stack(stack->nTop + 1);
         #endif
     } else {
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
+        for(size_t expectedDiff = 1; expectedDiff < cell->state /*nMissingLayers + 1*/; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
                 struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
                 if( neighb->doAdvance ) continue;  /* omit visited ("removed") */

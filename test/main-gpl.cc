@@ -165,7 +165,7 @@ main(int argc, char * argv[]) {
 
     cats_CellsPool * cats = cats_cells_pool_create(4);
     float angleThreshold = .95*M_PI;
-    cats_evolve(acc, cats, by_angle_filter, &angleThreshold, 1, NULL);
+    cats_evaluate(acc, cats, by_angle_filter, &angleThreshold, 1, NULL);
 
     FILE * outf = fopen("/tmp/cells-dump.json", "w");
     cats_dump_json(acc, outf);

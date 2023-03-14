@@ -37,20 +37,20 @@ find_package(ROOT COMPONENTS Core)
 if(ROOT_FOUND)
     include( ${ROOT_USE_FILE} )
 
-    add_executable( catsc-test test/main-gpl.cc )
-    target_link_libraries( catsc-test ${catsc_LIB} ${ROOT_LIBRARIES} )
+    add_executable( catsc-test-randomc test/main-gpl.cc )
+    target_link_libraries( catsc-test-randomc ${catsc_LIB} ${ROOT_LIBRARIES} )
 
-    add_executable( catsc-test-mult test/main-gpl-mult.cc )
-    target_link_libraries( catsc-test-mult ${catsc_LIB} ${ROOT_LIBRARIES} )
-
-    add_executable( catsc-test-hard test/main-hard.cc )
-    target_link_libraries( catsc-test-hard ${catsc_LIB} ${ROOT_LIBRARIES} )
+    add_executable( catsc-test-randomcpp test/main-gpl-mult.cc )
+    target_link_libraries( catsc-test-randomcpp ${catsc_LIB} ${ROOT_LIBRARIES} )
 
     #separate_arguments(ROOT_CXX_FLAGS_ UNIX_COMMAND ${ROOT_CXX_FLAGS})
     #list( REMOVE_ITEM ROOT_CXX_FLAGS_ -std=c++11 -std=c++14 )
     #target_compile_options(catsc-test-mult PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${ROOT_CXX_FLAGS_}>)
     #list(APPEND CMAKE_BUILD_RPATH "${ROOT_LIBRARY_DIR}")
 endif(ROOT_FOUND)
+
+add_executable( catsc-test test/main-test.cc )
+target_link_libraries( catsc-test ${catsc_LIB} )
 
 install( TARGETS ${catsc_LIB}
          EXPORT catscTargets
