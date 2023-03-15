@@ -35,9 +35,9 @@ struct HardFilter : public CATSTrackFinder::iTripletFilter {
         auto itAB = b.find(&a)
            , itBC = c.find(&b)
            ;
-        //std::cout << "  comparing a=" << a << ", b=" << b << ", c=" << c    // XXX
-        //          << " => " << (itAB != b.end()) << (itBC != c.end())       // XXX
-        //          << std::endl;                                             // XXX
+        std::cout << "  testing a=" << a << ", b=" << b << ", c=" << c    // XXX
+                  << " => " << (itAB != b.end()) << (itBC != c.end())       // XXX
+                  << std::endl;                                             // XXX
         return itAB != b.end() && itBC != c.end();
     }
 };
@@ -116,10 +116,13 @@ Collector::collect( const cats_HitData_t * hits_
                   , size_t length
                   ) {
     std::vector<const HardHit *> found;
+    std::cout << "  track candidate:";
     for(size_t i = 0; i < length; ++i) {
         const HardHit * hitPtr = reinterpret_cast<const HardHit *>(hits_[i]);
+        std::cout << " " << *hitPtr;
         found.push_back(hitPtr);
     }
+    std::cout << std::endl;
     auto it = find(found);
     bool error = false;
     if(it == end()) {

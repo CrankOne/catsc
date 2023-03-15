@@ -274,7 +274,7 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_track_candidate(_layers, minLength, _lastNMissing
+        cats_for_each_track_candidate(_layers, minLength/*, _lastNMissing*/
                 , c_f_wrapper_collect, &collector);
         collector.done();
     }

@@ -168,7 +168,7 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
                              , unsigned int minLength
-                             , unsigned int nMissingLayers
+                             //, unsigned int nMissingLayers
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              );
