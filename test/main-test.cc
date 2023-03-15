@@ -511,8 +511,10 @@ main(int argc, char * argv[]) {
 
     if( cfg.method == "excessive" ) {
         cats.collect_excessive(collector, cfg.nMinLength);
-    } else if( cfg.method == "strict" ) {
+    } else if( cfg.method == "moderate" ) {
         cats.collect(collector, cfg.nMinLength);
+    } else if( cfg.method == "strict" ) {
+        cats.collect_strict(collector, cfg.nMinLength);
     } else if(cfg.method == "longest") {
         cats.collect_longest(collector, cfg.nMinLength);
     } else if(cfg.method == "winning") {

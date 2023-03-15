@@ -266,7 +266,7 @@ public:
     ///\brief Collects all track candidates permitted by the filter
     ///
     /// Forwards execution to `cats_for_each_track_candidate()` that might
-    /// be insufficient or excessive (see docs).
+    /// be excessive (see docs).
     void collect( iTrackCandidateCollector & collector
                 , cats_LayerNo_t minLength
                 ) {
@@ -275,6 +275,22 @@ public:
         if(_wasCollected)
             _reset_collection_flags();
         cats_for_each_track_candidate(_layers, minLength/*, _lastNMissing*/
+                , c_f_wrapper_collect, &collector);
+        collector.done();
+    }
+
+    ///\brief Collects all track candidates permitted by the filter
+    ///
+    /// Forwards execution to `cats_for_each_track_candidate_strict()` that might
+    /// be insufficient or excessive (see docs).
+    void collect_strict( iTrackCandidateCollector & collector
+                       , cats_LayerNo_t minLength
+                       ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        cats_for_each_track_candidate_strict(_layers, minLength/*, _lastNMissing*/
                 , c_f_wrapper_collect, &collector);
         collector.done();
     }

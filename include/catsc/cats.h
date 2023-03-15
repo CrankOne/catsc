@@ -153,7 +153,7 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
                                        );
 
 /**\brief Iterates over resulting connection graph visiting all the enumerated
- *        subsets, permitting duplicating sub-sequences due to inefficiences
+ *        subsets, permitting sub-sequences
  *
  * This is collecting routine will invoke given callback on each found track
  * candidate, including sub-sequences when they are permitted by non-weighted
@@ -164,6 +164,9 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
  * This evaluation routine can be preferable for certain tracking scenarios
  * whith low multiplicity and low efficiency, albeit for high multiplicities
  * can create highly excessive redundancy.
+ *
+ * Comparing to excessive strategy it will not iterate over certain sequences
+ * (TODO: elaborate the difference).
  * */
 void
 cats_for_each_track_candidate( struct cats_Layers * ls
@@ -172,6 +175,26 @@ cats_for_each_track_candidate( struct cats_Layers * ls
                              , void (*callback)(const cats_HitData_t *, size_t, void *)
                              , void * userdata
                              );
+
+/**\brief Iterates over resulting connection graph visiting all the enumerated
+ *        subsets, omitting sub-sequences
+ *
+ * This is collecting routine will invoke given callback on each found track
+ * candidate, excluding their sub-sequences when they are permitted by
+ * non-weighted geometrical filter. Hit insertion order
+ * affects determinism: combinations corresponging to hits inserted first will
+ * be considered first.
+ *
+ * This evaluation routine can be preferable for certain tracking scenarios
+ * whith high multiplicity and low efficiency.
+ * */
+void
+cats_for_each_track_candidate_strict( struct cats_Layers * ls
+                                    , unsigned int minLength
+                                    //, unsigned int nMissingLayers
+                                    , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                    , void * userdata
+                                    );
 
 /**\brief Iterates over resulting connection graph visiting enumerated
  *        subsets, preferring longest sequences, by hit insertion order.
