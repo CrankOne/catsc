@@ -97,11 +97,39 @@ void cats_dump_json( struct cats_Layers *
  * */
 void cats_cells_pool_delete( struct cats_CellsPool * );
 
-/**\brief Re-sets the pool for rentrant usage*/
+/**\brief Re-sets the pool for rentrant usage
+ *
+ * Useful for reentrant usage of the layers stack between switching the
+ * connection topologies (change missing layers, apply doublet filtering or
+ * lookup, etc).
+ * */
 void cats_cells_pool_reset( struct cats_Layers *
                           , struct cats_CellsPool *
                           , size_t softLimitCells
                           );
+
+/**\brief Builds a pairwise connection graph to be evaluated on given layers
+ *
+ * This routine appends the given layers stack with connection information.
+ * Connections are established totally, between neighbouring layers, without
+ * doublet filtering or lookup, based only on the permission provided by
+ * logically-discrete triplet filtering.
+ *
+ * \returns `CATSC_RC_EMPTY_GRAPH` if no connection can be performed for
+ *          given layers
+ * \returns `CATSC_ERROR_ALLOC_FAILURE_CELLS` at cell (link b/w hits)
+ *          allocation failure.
+ * \returns `CATSC_ERROR_ALLOC_FAILURE_BACKREF_COUNTER` on cell counter
+ *          overflow (too many connections)
+ * \returns `CATSC_ERROR_ALLOC_FAILURE_BACKREF` on back references list
+ *          overflow (too many connections)
+ * */
+int cats_connect( struct cats_Layers * ls
+                , struct cats_CellsPool * a
+                , cats_Filter_t test_triplet
+                , void * userData
+                , cats_LayerNo_t nMissingLayers
+                );
 
 /**\brief Performs forward evaluation (1st stage) of CATS algorithm
  *
@@ -111,20 +139,16 @@ void cats_cells_pool_reset( struct cats_Layers *
  * Set `debugJSONStream` to disable debug dump for each iteration.
  *
  * \returns    0 if automaton is evaluated and ready to provide the tracks.
- * \returns -101 at cell (link b/w hits) allocation failure.
- * \returns -102 at cell neighbor reference allocation failure.
  * */
-int cats_evaluate( struct cats_Layers *
-                 , struct cats_CellsPool *
-                 , cats_Filter_t test_triplet
-                 , void * userData
-                 , unsigned int nMissingLayers
-                 , FILE * debugJSONStream
-                 );
+int cats_evaluate( struct cats_Layers *, FILE * debugJSONStream);
 
 /**\brief Re-sets "visited" flags after previous `collect()` call
  *
- * Re-sets internal state flags used to mark visited cells.
+ * Re-sets internal state flags used to mark visited cells. Should be used
+ * between switching strategies.
+ *
+ * \note Only useful if connection topology can to be left intact between
+ *       applying different strategies.
  * */
 void reset_collection_flags( struct cats_CellsPool * );
 
@@ -147,7 +171,6 @@ void reset_collection_flags( struct cats_CellsPool * );
 void
 cats_for_each_track_candidate_excessive( struct cats_Layers * ls
                                        , unsigned int minLength
-                                       , unsigned int nMissingLayers
                                        , void (*callback)(const cats_HitData_t *, size_t, void *)
                                        , void * userdata
                                        );

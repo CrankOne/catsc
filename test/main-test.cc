@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <map>
+#include <cstring>
 
 // Geometry-agnostic hit repr -- stores only hit label and weighted connections
 struct HardHit : public std::unordered_map<const HardHit *, float> {
@@ -35,9 +36,9 @@ struct HardFilter : public CATSTrackFinder::iTripletFilter {
         auto itAB = b.find(&a)
            , itBC = c.find(&b)
            ;
-        std::cout << "  testing a=" << a << ", b=" << b << ", c=" << c    // XXX
-                  << " => " << (itAB != b.end()) << (itBC != c.end())       // XXX
-                  << std::endl;                                             // XXX
+        //std::cout << "  testing a=" << a << ", b=" << b << ", c=" << c    // XXX
+        //          << " => " << (itAB != b.end()) << (itBC != c.end())       // XXX
+        //          << std::endl;                                             // XXX
         return itAB != b.end() && itBC != c.end();
     }
 };
@@ -59,14 +60,27 @@ struct hash< std::vector<const HardHit *> > {
 };
 }  // namespace std
 
+// A (nasty) type for test cases, to be filled from file. Represents a sequence
+// of found candidates of the hierarchical form:
+//  #found/(is-found:bool, hits:[(layer#, hit#)])
+typedef
+    std::vector<std::pair<bool, std::vector<std::pair<size_t, size_t>>>>
+    ExpectedConnections;
+
 // Collector type. Once track found, corresponding flag is raised.
 struct Collector : public CATSTrackFinder::iTrackCandidateCollector
                  , public std::unordered_map< std::vector<const HardHit *>, bool >
                  {
+public:
+    bool verbose;
+    ExpectedConnections expected;
+    bool failed;
 protected:
+    size_t _nCollected;
     // recursive helper
     void _fill_from_hit(std::vector<const HardHit *> &, size_t minLength);
 public:
+    Collector() : verbose(false), failed(false), _nCollected(0) {}
     /// gets called vs every found track candidate
     void collect(const cats_HitData_t *, size_t ) override;
     /// used to pre-fill the collector with expected track candidates
@@ -74,6 +88,13 @@ public:
 
     /// Prints state of the collector
     void dump(std::ostream & os) const;
+
+    void reset() {
+        _nCollected = 0;
+        failed = false;
+        for(auto & entry : *this) entry.second = false;
+        expected.clear();
+    }
 };
 
 void
@@ -116,13 +137,13 @@ Collector::collect( const cats_HitData_t * hits_
                   , size_t length
                   ) {
     std::vector<const HardHit *> found;
-    std::cout << "  track candidate:";
+    if(verbose) std::cout << "  track candidate:";
     for(size_t i = 0; i < length; ++i) {
         const HardHit * hitPtr = reinterpret_cast<const HardHit *>(hits_[i]);
-        std::cout << " " << *hitPtr;
+        if(verbose) std::cout << " " << *hitPtr;
         found.push_back(hitPtr);
     }
-    std::cout << std::endl;
+    if(verbose) std::cout << std::endl;
     auto it = find(found);
     bool error = false;
     if(it == end()) {
@@ -142,6 +163,46 @@ Collector::collect( const cats_HitData_t * hits_
         }
         std::cerr << std::endl;
     }
+
+    if(!expected.empty()) {
+        if(_nCollected >= expected.size()) {
+            std::cerr << "Comparison with expected ignored (candidate number"
+                " exceeds expected)." << std::endl;
+            ++_nCollected;
+            failed = true;
+            return;
+        }
+        bool errorOnEntry = false;
+        auto & entry = expected[_nCollected];
+        if(entry.second.size() != found.size()) {
+            std::cerr << "size mismatch on #" << _nCollected << ":" << std::endl;
+            errorOnEntry = true;
+        }
+        for(size_t i = 0; i < entry.second.size(); ++i) {
+            if( found[i]->id != entry.second[i] ) {
+                std::cerr << i << "-th entry mismatch on #" << _nCollected << ":" << std::endl;
+                errorOnEntry = true;
+                break;
+            }
+        }
+        if(errorOnEntry) {
+            std::cerr << "  expected: ";
+            for(const auto & hit : entry.second ) {
+                std::cerr << hit.first << "," << hit.second << " ";
+            }
+            std::cerr << std::endl;
+            std::cerr << "     found: ";
+            for(const HardHit * hit : found ) {
+                std::cerr << hit->id.first << "," << hit->id.second << " ";
+            }
+            std::cerr << std::endl;
+            failed = true;
+        } else {
+            assert(!entry.first);  // found same candidate twice
+            entry.first = true;
+        }
+    }
+    ++_nCollected;
 }
 
 //                          * * *   * * *   * * *
@@ -153,6 +214,7 @@ _fill_random( std::vector<HardLayer> & layers //CATSTrackFinder & cats
             , int nHitsPerLayer
             , int nMissedLayers
             , int minLength
+            , bool verbose
             ) {
     // init random number generators
     std::default_random_engine eng{seed};
@@ -165,7 +227,8 @@ _fill_random( std::vector<HardLayer> & layers //CATSTrackFinder & cats
         // number of hits per layer choosen randomly +/- 50% of base value
         int nHitsOnLayer = urd(eng);
         layers.push_back(HardLayer{});
-        std::cout << nHitsOnLayer << " hits on layer #" << nLayer << std::endl;
+        if(verbose)
+            std::cout << nHitsOnLayer << " hits on layer #" << nLayer << std::endl;
         // populate layer with hits
         for(int nHit = 0; nHit < nHitsOnLayer; ++nHit) {
             HardHit * hit = new HardHit(nLayer, nHit);
@@ -191,8 +254,8 @@ _fill_random( std::vector<HardLayer> & layers //CATSTrackFinder & cats
                     std::advance(it, n);
                     assert(it != layers[toLayer].end());
                     double w = urd4f(eng);
-                    std::cout << " connecting " << *hit << " -> " << **it
-                              << " [" << w << "]" << std::endl;
+                    //std::cout << " connecting " << *hit << " -> " << **it  // XXX
+                    //          << " [" << w << "]" << std::endl;            // XXX
                     if(isFirst) isFirst = false;
                     hit->emplace(*it, w);
                 }
@@ -205,19 +268,93 @@ _fill_random( std::vector<HardLayer> & layers //CATSTrackFinder & cats
 
 //                          * * *   * * *   * * *
 
+typedef
+    std::tuple<std::string, cats_LayerNo_t, cats_LayerNo_t>  // strategy, length, missed
+    TestCaseKey;
+
+namespace std {
+template <> struct hash<TestCaseKey> {
+    std::size_t operator()(const TestCaseKey & k) const {
+      return ((std::hash<std::string>()(std::get<0>(k))
+               ^ (std::get<1>(k) << 1)) << 1)
+               ^ (std::get<2>(k) << 8);
+    }
+};
+}  // namespace std
+class ExpectedCases : public std::unordered_map< TestCaseKey
+                                               , ExpectedConnections
+                                               > {};
+
 static const std::regex gRxGraphLine (
     R"~(\s*(\d+)\s*,\s*(\d+)\s*->\s*(\d+)\s*,\s*(\d+)\s*\:\s*(\d+\.\d+)\s*)~");
+static const std::regex gRxStartCaseLine (
+    R"~(\s*CASE\s+([a-z]+)\s+length\s+(\d+)\s+missed\s+(\d+)\s*)~");
+static const std::regex gRxCaseItem (
+    R"~(\s*(\d+)\s*,\s*(\d+)\s*)~");
 
 static size_t
-_read_graph (std::ifstream & ifs, std::vector<HardLayer> & layers_) {
+_read_test_cases ( std::ifstream & ifs
+                 , std::vector<HardLayer> & layers_
+                 , ExpectedCases & expConns
+                 ) {
     std::string line;
     size_t nLine = 0;
     std::map<size_t, std::map<size_t, HardHit *>> layers;
+    // this is for case reading
+    std::string cStrategy;
+    cats_LayerNo_t nMissed = 0, minLength = 0;
+    size_t nTestCaseItem;
+    ExpectedConnections expConnsStrat;  // reentrant fill buffer
+    // iterate over lines
     while (std::getline (ifs, line)) {
         ++nLine;
-        if (line.empty()) continue;
-        if ('#' == line[0]) continue;
+        line.erase(std::find_if(line.rbegin(), line.rend(), [](unsigned char ch) {
+                return !std::isspace(ch);
+            }).base(), line.end());
+        if (line.empty()) continue;  // omit empty lines
+        if ('#' == line[0]) continue;  // omit comment lines
         std::smatch match;
+        if(!cStrategy.empty()) {  // if we're in test case block, read line as item
+            if( line == "ENDCASE" ) {  // note: sensitive to whitespaces
+                auto ir = expConns.emplace( std::tuple<std::string, cats_LayerNo_t, cats_LayerNo_t>{
+                                              cStrategy
+                                            , nMissed
+                                            , minLength
+                                            }
+                                    , expConnsStrat );
+                if(!ir.second) {
+                    char errbf[128];
+                    snprintf(errbf, sizeof(errbf), "Test case on line %zu"
+                                " repeats one of the above.", nLine);
+                    throw std::runtime_error(errbf);
+                }
+                cStrategy.clear();
+                nMissed = minLength = 0;
+                continue;
+            }
+            std::smatch sm;
+            std::string::const_iterator sit(line.begin());
+            std::vector<std::pair<size_t, size_t>> items;
+            while(std::regex_search(sit, line.cend(), sm, gRxCaseItem)) {
+                std::vector<std::string> stoks(sm.begin(), sm.end());
+                std::pair<size_t, size_t> item(std::stoi(stoks[1]), std::stoi(stoks[2]));
+                items.push_back(item);
+                sit = sm.suffix().first;
+            }
+            assert(nTestCaseItem == expConnsStrat.size());
+            expConnsStrat.push_back(decltype(expConnsStrat)::value_type{false, items});
+            ++ nTestCaseItem;
+            continue;
+        }
+        if(std::regex_match(line, match, gRxStartCaseLine)) {  // start test case block
+            std::vector<std::string> toks (match.begin(), match.end());
+            cStrategy = toks [1];
+            minLength = std::stoi(toks[2]);
+            nMissed = std::stoi(toks[3]);
+            nTestCaseItem = 0;
+            expConnsStrat.clear();
+            continue;
+        }
         if(!std::regex_match(line, match, gRxGraphLine)) {
             std::cerr << "line #" << nLine << " invalid" << std::endl;
             continue;
@@ -259,8 +396,8 @@ _read_graph (std::ifstream & ifs, std::vector<HardLayer> & layers_) {
         assert(toHitPtr);
         //fromHitPtr->emplace(toHitPtr, w);
         toHitPtr->emplace(fromHitPtr, w);  // ???
-        std::cout << " connecting " << *fromHitPtr << " -> " << *toHitPtr
-                  << " [" << w << "]" << std::endl;
+        //std::cout << " connecting " << *fromHitPtr << " -> " << *toHitPtr
+        //          << " [" << w << "]" << std::endl;
     }
     layers_.reserve(layers.rbegin()->first + 1);
     size_t orderlyLayer = 0;
@@ -306,6 +443,7 @@ struct AppCfg {
       , nMinLength
       ;
     FILE * debugJSONStream;
+    bool verbose;
 
     struct {
         // this is used for randomly-generated mode
@@ -316,6 +454,7 @@ struct AppCfg {
         } rndGenOpts;
         struct {
             std::string filename;
+            bool testAll;
         } readOpts;
     } mtdDep;
 };
@@ -326,12 +465,14 @@ _set_defaults( AppCfg & cfg ) {
     cfg.nMissedLayers = 1;
     cfg.nMinLength = 3;
     cfg.debugJSONStream = NULL;
+    cfg.verbose = false;
 
     cfg.mtdDep.rndGenOpts.seed = 1337;
     cfg.mtdDep.rndGenOpts.nLayers = 5;
     cfg.mtdDep.rndGenOpts.nHitsPerLayerBase = 7;
 
     cfg.mtdDep.readOpts.filename = "";
+    cfg.mtdDep.readOpts.testAll = false;
 }
 
 static void
@@ -341,13 +482,21 @@ _usage_info( std::ostream & os
            ) {
     os << "CATS(C) test application." << std::endl
        << "Usage:" << std::endl
-       << "    (1) $ " << appName << " -i <filename> [COMMON_OPTS]" << std::endl
-       << "    (2) $ " << appName << " -s <seed> -N <#layers> -n <#hits-per-layer> [COMMON_OPTS]" << std::endl
-       << "In mode (1) will read topology from file provided as argument to"
-          " `-i'. In mode (2) will generate random topology respecting seed"
+       << "    (1) $ " << appName << " -i <filename> -A [-v]" << std::endl
+       << "    (2) $ " << appName << " -i <filename> [COMMON_OPTS]" << std::endl
+       << "    (3) $ " << appName << " -s <seed> -N <#layers> -n <#hits-per-layer> [COMMON_OPTS]" << std::endl
+       << "In modes (1) and (2) will read topology from file provided as argument to"
+          " `-i'. In mode (3) will generate random topology respecting seed"
           " given by `-s' with average number of hits `-n' on `-N' layers."
-          " In both cases app will perform finding procedure for the topology"
-          " (read or generated)." << std::endl
+          " In all cases app will perform then finding procedure for the topology"
+          " (read or generated). Th strategy and"
+          " constrains are expected to be provided as [COMMON_OPTS]."
+          " When running in mode (2) with [COMMON_OPTS] matching one of the"
+          " test cases, the collected candidates will be automatically tested"
+          " against found test case (if any). In mode"
+          " (1) expected output will be tested against all"
+          " test cases provided with the given file (so COMMON_OPTS are"
+          " not needed)." << std::endl
        << "COMMON_OPTS are:" << std::endl
        << "  -m <method>, required option, defines collection method. Must"
           " be one of: \"exessive\", \"strict\", \"weighted-strict\","
@@ -368,12 +517,15 @@ _configure_app( int argc, char * argv[]
               , AppCfg & cfg
               ) {
     int opt;
-    while ((opt = getopt(argc, argv, "hi:s:N:n:m:l:w:D:")) != -1) {
+    while ((opt = getopt(argc, argv, "hvai:s:N:n:m:l:w:D:")) != -1) {
         switch (opt) {
         case 'h':
             _usage_info(std::cout, argv[0], cfg);
             return 1;
         // common opts
+        case 'v':
+            cfg.verbose = true;
+            break;
         case 'm':
             cfg.method = optarg;
             break;
@@ -386,6 +538,27 @@ _configure_app( int argc, char * argv[]
         case 'D':
             cfg.debugJSONStream = fopen(optarg, "w");
             break;
+        #if 0
+        case 't':
+            //cfg.mtdDep.readOpts.testCases.push_back(optarg);
+            if(!strcmp(optarg, "all")) {
+                cfg.mtdDep.readOpts.testCases.push_back(TestCaseKey{"all", 0, 0});
+            } else {
+                // parse test case description
+                std::regex tcRx(R"~(([a-z]+)-(\d+)-(\d+))~");
+                std::smatch m;
+                std::string expr(optarg);
+                if(!std::regex_match(expr, m, tcRx)) {
+                    std::cerr << "Test reference from cmd-line \"" << optarg << "\""
+                        << " doesn't match the pattern." << std::endl;
+                    return 1;
+                }
+                std::vector<std::string> toks(m.begin(), m.end());
+                cfg.mtdDep.readOpts.testCases.push_back(
+                       TestCaseKey(toks[1], std::stoi(toks[2]), std::stoi(toks[3])) );
+            }
+            break;
+        #endif
         // input file opts
         case 'i':
             if('\0' == cfg.mode) cfg.mode = 'f';
@@ -395,6 +568,15 @@ _configure_app( int argc, char * argv[]
                 return -2;
             }
             cfg.mtdDep.readOpts.filename = optarg;
+            break;
+        case 'a':
+            if('\0' == cfg.mode) cfg.mode = 'f';
+            if(cfg.mode != 'f') {
+                std::cerr << "App config error: conflicting keys"
+                    " (contradicting modes)." << std::endl;
+                return -2;
+            }
+            cfg.mtdDep.readOpts.testAll = true;
             break;
         // random gen
         case 's':
@@ -446,6 +628,7 @@ main(int argc, char * argv[]) {
     if(rc > 0) return 0;
 
     std::vector<HardLayer> layers;
+    ExpectedCases expConns;
 
     if(cfg.mode == 'f') {  // read topology from file
         if(cfg.mtdDep.readOpts.filename.empty()) {
@@ -459,27 +642,40 @@ main(int argc, char * argv[]) {
                       << std::endl;
             return 1;
         }
-        std::cout << "Reading \"" << cfg.mtdDep.readOpts.filename << "\":" << std::endl;
-        size_t totalHits = _read_graph(ifs, layers);
-        std::cout << "Read " << layers.size() << " layers with "
-                  << totalHits << " hits total." << std::endl;
+        if(cfg.verbose)
+            std::cout << "Reading \"" << cfg.mtdDep.readOpts.filename << "\":" << std::endl;
+        size_t totalHits = _read_test_cases(ifs, layers, expConns);
+        if(cfg.verbose) {
+            std::cout << "Read " << layers.size() << " layers with "
+                      << totalHits << " hits total." << std::endl;
+            std::cout << "Test cases discovered:" << std::endl;
+            for(auto & testItem : expConns) {
+                std::cout << " * \"" << std::get<0>(testItem.first) << "\", missed="
+                    << std::get<1>(testItem.first) << ", length="
+                    << std::get<2>(testItem.first) << std::endl;
+            }
+        }
     } else if(cfg.mode == 'r') {  // generate random topology
         _fill_random( layers
                     , cfg.mtdDep.rndGenOpts.seed
                     , cfg.mtdDep.rndGenOpts.nLayers
                     , cfg.mtdDep.rndGenOpts.nHitsPerLayerBase
                     , cfg.nMissedLayers
-                    , cfg.nMissedLayers );
+                    , cfg.nMissedLayers
+                    , cfg.verbose
+                    );
     } else {
         std::cerr << "App error: no mode (nothing to do)." << std::endl;
         return 1;
     }
 
-    std::cout << "Hits on layers:" << std::endl;
-    size_t n = 0;
-    for( auto layerEntry : layers ) {
-        std::cout << "   #" << n++ << " of " << layerEntry.size() << " hits"
-            << std::endl;
+    if(cfg.verbose) {
+        std::cout << "Hits on layers:" << std::endl;
+        size_t n = 0;
+        for( auto layerEntry : layers ) {
+            std::cout << "   #" << n++ << " of " << layerEntry.size() << " hits"
+                << std::endl;
+        }
     }
 
     CATSTrackFinder cats(layers.size(), 10000, 100, 1000, cfg.debugJSONStream);
@@ -492,50 +688,114 @@ main(int argc, char * argv[]) {
         ++nl;
     }
     Collector collector;
+    collector.verbose = cfg.verbose;
     collector.prepare(layers);
 
-    HardFilter filter;
-    bool evaluated = false;
-    try {
-        evaluated = cats.evaluate(filter, cfg.nMissedLayers);
-    } catch( std::bad_alloc & e ) {
-        std::cerr << "Bad allocation: " << e.what()
-                  << "; last C return code: " << cats.c_retcode()
-                  << std::endl;
-        return 1;
-    }
-    if(!evaluated) {
-        std::cerr << "CATS was not evaluated (empty graph)." << std::endl;
-        return 1;
-    }
-
-    if( cfg.method == "excessive" ) {
-        cats.collect_excessive(collector, cfg.nMinLength);
-    } else if( cfg.method == "moderate" ) {
-        cats.collect(collector, cfg.nMinLength);
-    } else if( cfg.method == "strict" ) {
-        cats.collect_strict(collector, cfg.nMinLength);
-    } else if(cfg.method == "longest") {
-        cats.collect_longest(collector, cfg.nMinLength);
-    } else if(cfg.method == "winning") {
-        cats.collect_winning(collector, cfg.nMinLength);
+    std::unordered_set<TestCaseKey> keys;
+    if(!cfg.mtdDep.readOpts.testAll) {
+        keys.emplace(TestCaseKey{cfg.method, cfg.nMissedLayers, cfg.nMinLength});
     } else {
-        std::cerr << "Unknown collection"
-            " method: \"" << cfg.method << "\"." << std::endl;
-        return 1;
+        if(expConns.empty()) {
+            std::cerr << "WARNING: can't perform all tests as file does not"
+                " contain any test cases." << std::endl;
+        }
+        std::transform( expConns.begin(), expConns.end()
+                      , std::inserter(keys, keys.end())
+                      , [](auto & p) {return p.first;}
+                      );
     }
+    bool hadError = false
+       , testPerformed = false
+       ;
+    for(auto k : keys) {
+        collector.reset();
+        auto control = expConns.find(k);
+        if(control == expConns.end()) {
+            if(cfg.verbose)
+                std::cout << "No matching test case (" << std::get<0>(k)
+                    << ", length=" << std::get<2>(k) << ", missed="
+                    << std::get<1>(k) << ")."
+                    << std::endl;
+        } else {
+            if(cfg.verbose)
+                std::cout << "Considering test case (" << std::get<0>(k)
+                    << ", length=" << std::get<2>(k) << ", missed="
+                    << std::get<1>(k) << ") of "
+                    << control->second.size() << " entries."
+                    << std::endl;
+            collector.expected = control->second;
+        }
+        HardFilter filter;
+        bool evaluated = false;
+        const cats_LayerNo_t thisNMissing = std::get<1>(k)
+                           , thisLength = std::get<2>(k)
+                           ;
+        const std::string thisMethod = std::get<0>(k);
+        try {
+            evaluated = cats.evaluate(filter, thisNMissing);
+        } catch( std::bad_alloc & e ) {
+            std::cerr << "Bad allocation: " << e.what()
+                      << "; last C return code: " << cats.c_retcode()
+                      << std::endl;
+            return 1;
+        }
+        if(!evaluated) {
+            std::cerr << "CATS was not evaluated (empty graph)." << std::endl;
+            return 1;
+        }
 
-    //std::cout << "Collected " << ... << " of " << collector.size() << " candidates:"
-    //    << std::endl;
-    collector.dump(std::cout);
+        if( thisMethod == "excessive" ) {
+            cats.collect_excessive(collector, thisLength);
+        } else if( thisMethod == "moderate" ) {
+            cats.collect(collector, thisLength);
+        } else if( thisMethod == "strict" ) {
+            cats.collect_strict(collector, thisLength);
+        } else if(thisMethod == "longest") {
+            cats.collect_longest(collector, thisLength);
+        } else if(thisMethod == "winning") {
+            cats.collect_winning(collector, thisLength);
+        } else {
+            std::cerr << "Unknown collection"
+                " method: \"" << thisMethod << "\"." << std::endl;
+            return 1;
+        }
 
-    std::cout << "Test done." << std::endl;
+        if(cfg.verbose)
+            collector.dump(std::cout);
 
+        hadError |= collector.failed;
+        if(!collector.expected.empty()) {
+            testPerformed = true;
+            size_t nEntry = 0;
+            for(const auto & entry : collector.expected) {
+                if(entry.first) {
+                    ++nEntry;
+                    continue;
+                }
+                hadError = true;
+                std::cerr << "expected entry #" << nEntry << " missed:";
+                for(auto p : entry.second) {
+                    std::cerr << " " << p.first << "," << p.second;
+                }
+                std::cerr << std::endl;
+                ++nEntry;
+            }
+        }
+    }  // modes loop
     if(cfg.debugJSONStream) {
         fclose(cfg.debugJSONStream);
         cfg.debugJSONStream = nullptr;
     }
 
-    return 0;
+    if(cfg.verbose) {
+        if(hadError)
+            std::cerr << "There were errors." << std::endl;
+        else if(testPerformed)
+            std::cout << "Test ok." << std::endl;
+        else
+            std::cout << "No test case foreseen." << std::endl;
+    }
+
+    return hadError ? 1 : 0;
 }
 

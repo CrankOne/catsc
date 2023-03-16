@@ -144,15 +144,13 @@ protected:
     /// \throw `std::bad_alloc` on memory error
     bool _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
         if( _debugJSONStream ) fputs("},\"its\":[", _debugJSONStream);
-        if(!!(_rc = cats_evaluate( _layers, _cells
-                                 , TrackFinder<HitDataT>::c_f_wrapper_filter
-                                 , &filter
-                                 , nMissingLayers
-                                 , _debugJSONStream
-                                 )) ) {
-            if(_debugJSONStream) fputs("]}", _debugJSONStream);
+        if(!!(_rc = cats_connect(_layers
+                                , _cells
+                                , TrackFinder<HitDataT>::c_f_wrapper_filter
+                                , &filter
+                                , nMissingLayers
+                                )) ) {
             if(_rc == CATSC_RC_EMPTY_GRAPH ) {
-                if(_debugJSONStream) fputs("]}", _debugJSONStream);
                 _evaluated = true;
                 return false;  // filter discriminated all
             }
@@ -166,6 +164,11 @@ protected:
                 // ^^^ TODO: verbose descriptions/dedicated exceptions for
                 //     error codes
             }
+        }
+        if( 0 != cats_evaluate( _layers, _debugJSONStream )) {
+            if(_debugJSONStream) fputs("]}", _debugJSONStream);
+            _evaluated = false;
+            return false;
         }
         if(_debugJSONStream) fputs("]}", _debugJSONStream);
         _evaluated = true;
@@ -189,6 +192,7 @@ public:
                      , _softLimitHits(softLimitHits)
                      , _softLimitRefs(softLimitRefs)
                      , _evaluated(false)
+                     , _lastNMissing(0)
                      , _debugJSONStream(debugJSONStream)
                      , _isFirstHit(true)
                      , _rc(0)
@@ -239,8 +243,13 @@ public:
     /// Evaluates automaton; prepares connection graph for track collection
     bool evaluate( iTripletFilter & filter
                  , cats_LayerNo_t nMissingLayers ) {
-        if(_evaluated)
-            throw std::runtime_error("CATS already evaluated");
+        if(_evaluated) {
+            cats_cells_pool_reset( _layers
+                                 , _cells
+                                 , _softLimitCells
+                                 );
+            _evaluated = false;
+        }
         _lastNMissing = nMissingLayers;
         return _evaluate(filter, _lastNMissing);
     }
@@ -257,7 +266,7 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_track_candidate_excessive(_layers, minLength, _lastNMissing
+        cats_for_each_track_candidate_excessive(_layers, minLength
                 , c_f_wrapper_collect, &collector);
         collector.done();
         _wasCollected = true;
@@ -417,6 +426,7 @@ TrackFinder<HitDataT>::c_f_wrapper_wfilter( cats_HitData_t c1
                 );
 }
 
+#if 0
 /**\brief A collector shim filtering only longest unique hit sequences
  *
  * This shimming class shall provide only the sequences of hits that are not
@@ -451,6 +461,7 @@ public:
         _collectedData.clear();
     }
 };
+#endif
 
 }  // namespace catsc
 

@@ -416,16 +416,16 @@ _advance_cell_state_if_need(struct Cell * cellPtr) {
 }
 
 int
-cats_evaluate( struct cats_Layers * ls
-             , struct cats_CellsPool * a
-             , cats_Filter_t test_triplet
-             , void * userData
-             , unsigned int nMissingLayers
-             , FILE * debugJSONStream
-             ) {
+cats_connect( struct cats_Layers * ls
+            , struct cats_CellsPool * a
+            , cats_Filter_t test_triplet
+            , void * userData
+            , cats_LayerNo_t nMissingLayers
+            ) {
     assert(ls);
     assert(a);
     assert(ls->nLayers > 2);
+    ++nMissingLayers;
     /* Estimated number of cells needed */
     size_t nCellsNeed = 0;
     for( cats_LayerNo_t fromNLayer = 0
@@ -459,8 +459,6 @@ cats_evaluate( struct cats_Layers * ls
     }
     /* Create cells */
     struct Cell * cCell = a->pool;  /* tracks last inserted cell */
-    #if 1
-    #if 1  //assert(nMissingLayers < ls->nLayers);
     for( cats_LayerNo_t toNLayer = 1
        ; toNLayer < ls->nLayers
        ; ++toNLayer ) {
@@ -471,7 +469,6 @@ cats_evaluate( struct cats_Layers * ls
            ; --fromNLayer ) {
             int rc = 0;
             assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
-            printf(" xxx connecting %d -> %d\n", (int) fromNLayer, (int) toNLayer);
             /* Create cells connecting this layer pair */
             cCell = _connect_layers( cCell
                                    , ls->layers + fromNLayer
@@ -487,58 +484,13 @@ cats_evaluate( struct cats_Layers * ls
             if(0 == fromNLayer) break;
         }
     }
-    #else
-    for( cats_LayerNo_t cNMissing = 1; cNMissing <= nMissingLayers; ++ cNMissing ) {
-        for( cats_LayerNo_t fromNLayer = 0
-           ; fromNLayer < ls->nLayers - cNMissing
-           ; ++fromNLayer ) {
-            //cats_LayerNo_t toNLayer = fromNLayer + cNMissing;
-            //assert(toNLayer < ls->nLayers);
-            for( cats_LayerNo_t toNLayer = fromNLayer + 1
-               ; toNLayer <= fromNLayer + cNMissing //toNLayer < ls->nLayers
-               ; ++toNLayer ) {
-                int rc = 0;
-                assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
-                printf(" xxx connecting %d -> %d\n", (int) fromNLayer, (int) toNLayer);
-                /* Create cells connecting this layer pair */
-                cCell = _connect_layers( cCell
-                                       , ls->layers + fromNLayer
-                                       , ls->layers + toNLayer
-                                       , test_triplet
-                                       , userData
-                                       , &rc
-                                       );
-                if(NULL == cCell) {
-                    assert(rc);  /* _connect_layers() did not return error code */
-                    return rc;
-                }
-            }
-        }
-    }
-    #endif
-    #else
-    for( cats_LayerNo_t fromNLayer = 0
-       ; fromNLayer < ls->nLayers - 1
-       ; ++fromNLayer ) {
-        for( cats_LayerNo_t toNLayer = fromNLayer + 1
-           ; toNLayer < fromNLayer + 2 + nMissingLayers && toNLayer < ls->nLayers
-           ; ++toNLayer ) {
-            int rc = 0;
-            /* Create cells connecting this layer pair */
-            cCell = _connect_layers( cCell
-                                   , ls->layers + fromNLayer
-                                   , ls->layers + toNLayer
-                                   , test_triplet
-                                   , userData
-                                   , &rc
-                                   );
-            if(NULL == cCell) {
-                assert(rc);
-                return rc;
-            }
-        }
-    }
-    #endif
+    return 0;
+}
+
+int
+cats_evaluate( struct cats_Layers * ls, FILE * debugJSONStream) {
+    assert(ls);
+    assert(ls->nLayers > 2);
     /* Evaluate: iterate over cells interfacing the layer 2, 3... and
      * advanced the states of every cell which state matches the state of any
      * of its "left neighbour" */
@@ -649,11 +601,6 @@ _eval_from_excessive( struct Cell * cell
         for(size_t expectedDiff = 1; expectedDiff <= cell->state; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
                 struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-                printf( "xxx exp.diff=%d <= %d, df=%d\n"
-                      , (int) expectedDiff
-                      , (int) cell->state
-                      , (int) cell->state - neighb->state
-                      );  // XXX
                 if( cell->state - neighb->state == expectedDiff ) {
                     #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
                     _gDbgStack[stack->nTop][0] = expectedDiff;
@@ -664,7 +611,6 @@ _eval_from_excessive( struct Cell * cell
                     _eval_from_excessive(neighb, stack, callback, userdata, minLength);
                 }
             }
-            puts("next neighb\n");  // XXX
         }
     }
     #ifdef NDEBUG
@@ -677,7 +623,6 @@ _eval_from_excessive( struct Cell * cell
 void
 cats_for_each_track_candidate_excessive( struct cats_Layers * ls
                                        , unsigned int minLength
-                                       , unsigned int nMissingLayers  // xxx
                                        , void (*callback)(const cats_HitData_t *, size_t, void *)
                                        , void * userdata
                                        ) {
@@ -833,18 +778,6 @@ _eval_from_strict( struct Cell * cell
             if(found) continue;
             goto commit;  /* current stack brought at least one uniq element */
         }
-        #if 0
-        puts("subsets:");
-        fputs("  A: ", stdout);
-        for(ssize_t i = 0; i <= stack->nTop; ++i) {
-            printf("%p ", stack->data[i]);
-        }
-        fputs("\n  B: ", stdout);
-        for(ssize_t i = 0; i <= prevStack->nTop; ++i) {
-            printf("%p ", prevStack->data[i]);
-        }
-        fputs("\n", stdout);
-        #endif
         goto omit_subsequence;
 commit:
         callback(stack->data, stack->nTop + 1, userdata);
@@ -858,7 +791,6 @@ commit:
         for(size_t expectedDiff = 1; expectedDiff < cell->state; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
                 struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-                //if( neighb->doAdvance ) continue;  // TODO?
                 if( cell->state - neighb->state == expectedDiff ) {
                     assert( neighb->to == cell->from );
                     #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG

@@ -16,6 +16,7 @@ BaseTrackFinder::c_f_wrapper_collect( const cats_HitData_t * hitIDs, size_t nHit
         ->collect(hitIDs, nHits);
 }
 
+#if 0
 //
 // An utility class to provide "longest unique" sequences
 
@@ -89,6 +90,7 @@ LongestUniqueTrackCollector::collect(const cats_HitData_t * hits, size_t nHitIDs
     _collectedData.push_back(std::vector<cats_HitData_t>(hits, hits + nHitIDs));
     assert(_collectedData.back().size() == nHitIDs);
 }
+#endif
 
 }  // namespace catsc
 
