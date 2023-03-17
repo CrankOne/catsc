@@ -29,15 +29,14 @@ struct Cell;
  * */
 struct CellRefs {
     struct Cell ** cells;
-    cats_Weight_t * weights;  /* TODO: not needed for cell refs, need for weighted graph for left neighbs */
-    size_t nUsed, nAllocated;
+    size_t nUsed
+         , nAllocated;
 };
 
 static void
 _cell_refs_init( struct CellRefs * ptr ) {
     assert(ptr);
     ptr->cells = NULL;
-    ptr->weights = NULL;
     ptr->nUsed = ptr->nAllocated = 0;
 }
 
@@ -60,10 +59,6 @@ _cell_refs_add( struct CellRefs * ptr
             ptr->nAllocated -= CATS_BACKREF_REALLOC_STRIDE;
             return CATSC_ERROR_ALLOC_FAILURE_BACKREF;
         }
-        if(ptr->weights) {
-            ptr->weights = (cats_Weight_t *) realloc( ptr->weights,
-                    ptr->nAllocated * sizeof(cats_Weight_t *) );
-        }
         ptr->cells = newBackRefs;
     }
     ptr->cells[ptr->nUsed] = cellPtr;
@@ -82,10 +77,6 @@ _cell_refs_free( struct CellRefs * ptr ) {
     if(ptr->cells) {
         free(ptr->cells);
         ptr->cells = NULL;
-    }
-    if(ptr->weights) {
-        free(ptr->weights);
-        ptr->weights = NULL;
     }
 }
 
@@ -251,6 +242,7 @@ struct Cell {
     unsigned int state:31;
     unsigned int doAdvance:1;
     struct CellRefs leftNeighbours;
+    cats_Weight_t * weights;  /* either NULL or of the same number as leftNeighbours.nUsed */
 };
 
 static void
@@ -260,6 +252,7 @@ _cell_init( struct Cell * ptr ) {
     ptr->state = 1;
     ptr->doAdvance = 0;
     _cell_refs_init( &ptr->leftNeighbours );
+    ptr->weights = NULL;
 }
 
 
@@ -324,7 +317,6 @@ cats_cells_pool_create(cats_LayerNo_t nLayers) {
     if(!a) return NULL;
     a->pool = NULL;
     a->nCellsUsed = a->nCellsAllocated = 0;
-
     return a;
 }
 
@@ -343,6 +335,10 @@ cats_cells_pool_reset( struct cats_Layers * ls
 
     for( size_t nCell = 0; nCell < a->nCellsAllocated; ++nCell ) {
         _cell_refs_reset( &a->pool[nCell].leftNeighbours );
+        if( a->pool[nCell].weights ) {
+            free(a->pool[nCell].weights);
+            a->pool[nCell].weights = NULL;
+        }
     }
 
     if( softLimitCells && a->nCellsAllocated > softLimitCells ) {
@@ -614,9 +610,9 @@ _connect_layers_w( struct Cell * cCell
                 if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, (*weightBufferPtr)[0].cell))) {
                     return NULL;  /* allocation failure */
                 }
-                cCell->leftNeighbours.weights
+                cCell->weights
                     = (cats_Weight_t *) malloc(sizeof(cats_Weight_t));  // TODO: pool?
-                cCell->leftNeighbours.weights[0] = (*weightBufferPtr)[0].weight;
+                cCell->weights[0] = (*weightBufferPtr)[0].weight;
                 ++cCell;
                 continue;
             }
@@ -626,19 +622,19 @@ _connect_layers_w( struct Cell * cCell
                  , nCurrentWeights
                  , sizeof(struct WeightedNeighbour)
                  , _compare_weighted_neighbours );
-            cCell->leftNeighbours.weights
+            cCell->weights
                 = (cats_Weight_t *) malloc(nCurrentWeights*sizeof(cats_Weight_t));  // TODO: pool?
-            assert(cCell->leftNeighbours.weights);
+            assert(cCell->weights);
             /* copy left neighbours, in order */
             for(size_t nw = 0; nw < nCurrentWeights; ++nw) {
                 if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, (*weightBufferPtr)[nw].cell))) {
                     return NULL;  /* allocation failure */
                 }
                 assert(nw < cCell->leftNeighbours.nUsed);
-                assert(cCell->leftNeighbours.weights);
-                cCell->leftNeighbours.weights[nw] = (*weightBufferPtr)[nw].weight;
+                assert(cCell->weights);
+                cCell->weights[nw] = (*weightBufferPtr)[nw].weight;
+                printf( " xxx %f\n", (*weightBufferPtr)[nw].weight );
             }
-            
             /* shift "current cell" pointer */
             ++cCell;
         }
@@ -934,7 +930,7 @@ cats_visit_dfs_excessive_w( struct cats_Layers * ls
                     if(cell->state != cState) continue;
                     assert(cell->state > 1);
                     assert(cell->leftNeighbours.nUsed);  /* state > 1, must have left neighbs */
-                    assert(cell->leftNeighbours.weights);  /* graph is not weighted */
+                    assert(cell->weights);  /* graph is not weighted */
                     /* otherwise, copy cell to sort */
                     if(nNeighb == nNeighbAllocated) {
                         struct WeightedNeighbour * newwneighb
@@ -949,11 +945,10 @@ cats_visit_dfs_excessive_w( struct cats_Layers * ls
                         wneighb = newwneighb;
                     }
                     wneighb[nNeighb].cell = cell;
-                    wneighb[nNeighb].weight = cell->leftNeighbours.weights[0];
+                    wneighb[nNeighb].weight = cell->weights[0];
                     ++nNeighb;
                 }
             }
-            printf(" xxx %zu\n", nNeighb);  // XXX
             if(0 == nNeighb) continue;
             if(nNeighb > 1)
                 qsort( wneighb

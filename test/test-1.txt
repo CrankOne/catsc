@@ -72,6 +72,16 @@ CASE excessive length 3 missed 2 unweighted
                    2,0  1,0  0,0 
 ENDCASE
 
+CASE excessive length 4 missed 0 weighted
+    5,1  4,2  3,1  2,0  1,0  0,0
+    5,1  4,2  3,1  2,1  1,1
+    5,0  4,0  3,0  2,0  1,0  0,0
+    4,1  3,1  2,0  1,0  0,0
+    4,2  3,1  2,0  1,0  0,0
+    4,0  3,0  2,0  1,0  0,0
+    4,1  3,0  2,0  1,0  0,0
+ENDCASE
+
 #
 # Moderate strategy -----------------------------------------------------------
 
@@ -174,7 +184,7 @@ CASE longest length 3 missed 3 unweighted
 ENDCASE
 
 #
-# Exclusive strategy ----------------------------------------------------------
+# Exclusive (winning) strategy -----------------------------------------------
 
 CASE winning length 3 missed 2 unweighted
     5,0  4,0  3,0  2,0  1,0  0,0
