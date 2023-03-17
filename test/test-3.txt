@@ -1,0 +1,67 @@
+# Simple test to check weighted iterations
+#
+#   ==== 0 ==== #2
+#      /   \
+#   = 0 === 1 = #1
+#      \   /
+#   ==== 0 ==== #0
+# 
+# This is a bit more complex case as it requires CAT to perform sorting before
+# starting.
+
+0,0 -> 1,0 : 0.1
+0,0 -> 1,1 : 0.9
+1,0 -> 2,0 : 0.1
+1,1 -> 2,0 : 0.9
+
+CASE excessive length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE excessive length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE moderate length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE moderate length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE strict length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE strict length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE longest length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE longest length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE winning length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE winning length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+
+
+

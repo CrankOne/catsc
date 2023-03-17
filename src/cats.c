@@ -29,6 +29,7 @@ struct Cell;
  * */
 struct CellRefs {
     struct Cell ** cells;
+    cats_Weight_t * weights;  /* TODO: not needed for cell refs, need for weighted graph for left neighbs */
     size_t nUsed, nAllocated;
 };
 
@@ -36,11 +37,17 @@ static void
 _cell_refs_init( struct CellRefs * ptr ) {
     assert(ptr);
     ptr->cells = NULL;
+    ptr->weights = NULL;
     ptr->nUsed = ptr->nAllocated = 0;
 }
 
+/* NOTE: does not (re)allocate weights; in case of reentrant usage, when
+ * weights number exceeds previously allocated cells, weights array just gets
+ * freed */
 static int
-_cell_refs_add( struct CellRefs * ptr, struct Cell * cellPtr ) {
+_cell_refs_add( struct CellRefs * ptr
+              , struct Cell * cellPtr
+              ) {
     if( ptr->nUsed + 1 > ptr->nAllocated ) {
         if( SIZE_MAX - CATS_BACKREF_REALLOC_STRIDE <= ptr->nAllocated ) {
             return CATSC_ERROR_ALLOC_FAILURE_BACKREF_COUNTER;
@@ -52,6 +59,10 @@ _cell_refs_add( struct CellRefs * ptr, struct Cell * cellPtr ) {
         if(!newBackRefs) {
             ptr->nAllocated -= CATS_BACKREF_REALLOC_STRIDE;
             return CATSC_ERROR_ALLOC_FAILURE_BACKREF;
+        }
+        if(ptr->weights) {
+            ptr->weights = (cats_Weight_t *) realloc( ptr->weights,
+                    ptr->nAllocated * sizeof(cats_Weight_t *) );
         }
         ptr->cells = newBackRefs;
     }
@@ -71,6 +82,10 @@ _cell_refs_free( struct CellRefs * ptr ) {
     if(ptr->cells) {
         free(ptr->cells);
         ptr->cells = NULL;
+    }
+    if(ptr->weights) {
+        free(ptr->weights);
+        ptr->weights = NULL;
     }
 }
 
@@ -349,6 +364,52 @@ cats_cells_pool_delete( struct cats_CellsPool * a ) {
     free(a);
 }
 
+/*                                                          __________________
+ * ______________________________________________________ / Graph connections
+ */
+
+/* Helper function allocating cells for fully connected graph */
+static int
+_allocate_fully_connected_cells( struct cats_Layers * ls
+                               , struct cats_CellsPool * a
+                               , cats_LayerNo_t nMissingLayers
+                               , size_t * nCellsNeed_
+                               ) {
+    /* Estimated number of cells needed */
+    size_t nCellsNeed = 0;
+    for( cats_LayerNo_t fromNLayer = 0
+       ; fromNLayer < ls->nLayers - 1
+       ; ++fromNLayer ) {
+        for( cats_LayerNo_t toNLayer = fromNLayer + 1
+           ; toNLayer < fromNLayer + 2 + nMissingLayers && toNLayer < ls->nLayers
+           ; ++toNLayer ) {
+            nCellsNeed += ls->layers[fromNLayer].nPointsUsed
+                        * ls->layers[toNLayer].nPointsUsed
+                        ;
+        }
+    }
+    if(0 == nCellsNeed)
+        return CATSC_RC_EMPTY_GRAPH;
+    *nCellsNeed_ = nCellsNeed;
+    /* (re)allocate/assure required number of cells available */
+    if(a->nCellsAllocated < nCellsNeed) {
+        cats_cells_pool_reset(ls, a, 0);
+        struct Cell * newCells
+            = (struct Cell *) realloc( a->pool
+                                     , nCellsNeed * sizeof(struct Cell) );
+        if( !newCells ) return CATSC_ERROR_ALLOC_FAILURE_CELLS;
+        a->pool = newCells;
+        /* initialize newly allocated cells for use */
+        for( size_t nCell = a->nCellsAllocated
+           ; nCell < nCellsNeed
+           ; ++nCell ) {
+            _cell_init(a->pool + nCell);
+        }
+        a->nCellsAllocated = nCellsNeed;
+    }
+    return 0;
+}
+
 /* Modifies cells and layer references in a way to reflect the connections
  *
  * - toLayerCellRefs is used as destination collection of to-layer cells refs
@@ -367,16 +428,16 @@ _connect_layers( struct Cell * cCell
     assert(cCell);
     assert(catscErrNo);
     /* build the cells as cartesian product */
-    for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
-        struct cats_Point * fromHit = fromLayer->points + fromNHit;
-        for(size_t toNHit = 0; toNHit < toLayer->nPointsUsed; ++toNHit) {
-            struct cats_Point * toHit = toLayer->points + toNHit;
+    for(size_t toNHit = 0; toNHit < toLayer->nPointsUsed; ++toNHit) {
+        struct cats_Point * toHit = toLayer->points + toNHit;
+        for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
+            struct cats_Point * fromHit = fromLayer->points + fromNHit;
             cCell->from = fromHit;
             cCell->to = toHit;
             cCell->state = 1;
             cCell->doAdvance = 0;
             /* Cells (doublets) in left ("from") layer are created since we
-             * iterate from left to right; fill up the neghbours list. If
+             * iterate from left to right; append the neghbours list. If
              * `fromLayerCellRefs` is null we are probably on the leftmost
              * layer */
             for( size_t i = 0; i < fromHit->refs.nUsed; ++i ) {
@@ -405,17 +466,6 @@ _connect_layers( struct Cell * cCell
 }
 
 int
-_advance_cell_state_if_need(struct Cell * cellPtr) {
-    for( size_t nRef = 0
-       ; nRef < cellPtr->leftNeighbours.nUsed
-       ; ++nRef ) {
-        if( cellPtr->leftNeighbours.cells[nRef]->state != cellPtr->state ) continue;
-        cellPtr->doAdvance = 1;
-    }
-    return cellPtr->doAdvance;
-}
-
-int
 cats_connect( struct cats_Layers * ls
             , struct cats_CellsPool * a
             , cats_Filter_t test_triplet
@@ -426,37 +476,9 @@ cats_connect( struct cats_Layers * ls
     assert(a);
     assert(ls->nLayers > 2);
     ++nMissingLayers;
-    /* Estimated number of cells needed */
     size_t nCellsNeed = 0;
-    for( cats_LayerNo_t fromNLayer = 0
-       ; fromNLayer < ls->nLayers - 1
-       ; ++fromNLayer ) {
-        for( cats_LayerNo_t toNLayer = fromNLayer + 1
-           ; toNLayer < fromNLayer + 2 + nMissingLayers && toNLayer < ls->nLayers
-           ; ++toNLayer ) {
-            nCellsNeed += ls->layers[fromNLayer].nPointsUsed
-                        * ls->layers[toNLayer].nPointsUsed
-                        ;
-        }
-    }
-    if(0 == nCellsNeed)
-        return CATSC_RC_EMPTY_GRAPH;
-    /* (re)allocate/assure required number of cells available */
-    if(a->nCellsAllocated < nCellsNeed) {
-        cats_cells_pool_reset(ls, a, 0);
-        struct Cell * newCells
-            = (struct Cell *) realloc( a->pool
-                                     , nCellsNeed * sizeof(struct Cell) );
-        if( !newCells ) return CATSC_ERROR_ALLOC_FAILURE_CELLS;
-        a->pool = newCells;
-        /* initialize newly allocated cells for use */
-        for( size_t nCell = a->nCellsAllocated
-           ; nCell < nCellsNeed
-           ; ++nCell ) {
-            _cell_init(a->pool + nCell);
-        }
-        a->nCellsAllocated = nCellsNeed;
-    }
+    int rc = _allocate_fully_connected_cells(ls, a, nMissingLayers, &nCellsNeed);
+    if(rc) return rc;
     /* Create cells */
     struct Cell * cCell = a->pool;  /* tracks last inserted cell */
     for( cats_LayerNo_t toNLayer = 1
@@ -467,7 +489,7 @@ cats_connect( struct cats_Layers * ls
         for( cats_LayerNo_t fromNLayer = toNLayer - 1
            ; toNLayer - fromNLayer <= nMissingLayers
            ; --fromNLayer ) {
-            int rc = 0;
+            rc = 0;
             assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
             /* Create cells connecting this layer pair */
             cCell = _connect_layers( cCell
@@ -485,6 +507,203 @@ cats_connect( struct cats_Layers * ls
         }
     }
     return 0;
+}
+
+struct WeightedNeighbour {
+    cats_Weight_t weight;
+    struct Cell * cell;
+};
+
+static int
+_compare_weighted_neighbours(const void * a, const void * b) {
+    const cats_Weight_t wDiff
+         = ( ((const struct WeightedNeighbour *) b)->weight
+           - ((const struct WeightedNeighbour *) a)->weight
+           );
+    /* NOTE: sic! inverting meaning as we want weight to be sorted
+     *       descending (first are more reliable ones) */
+    if(wDiff > 0) return  1;
+    if(wDiff < 0) return -1;
+    return 0;
+}
+
+/* Modifies cells and layer references in a way to reflect the connections
+ *
+ * - toLayerCellRefs is used as destination collection of to-layer cells refs
+ * - "current cell" pointer is used to allocate (borrow) new cells
+ * - from/to layers are provided to retrieve collections of hits
+ * - test+userdata are for filtering
+ * */
+static struct Cell *
+_connect_layers_w( struct Cell * cCell
+                 , struct Layer * fromLayer
+                 , struct Layer * toLayer
+                 , cats_WeightedFilter_t test_triplet_w
+                 , void * userData
+                 , struct WeightedNeighbour ** weightBufferPtr
+                 , size_t * weightBufferSizePtr
+                 , int * catscErrNo
+                 ) {
+    assert(cCell);
+    assert(catscErrNo);
+    /* build the cells as cartesian product
+     *  .\\ |     |
+     *  .== o === o
+     *  .// |  ^  |
+     *   /  ^  |  ^- "to hit" on "to layer"
+     *   ^  |  `---- "current cell"
+     *   |  `------- "from hit" on "from layer"
+     *   `---------- "left neghbours" of "current cell"
+     * */
+    for(size_t toNHit = 0; toNHit < toLayer->nPointsUsed; ++toNHit) {
+        struct cats_Point * toHit = toLayer->points + toNHit;
+        for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
+            struct cats_Point * fromHit = fromLayer->points + fromNHit;
+            /* init current cell */
+            cCell->from = fromHit;
+            cCell->to = toHit;
+            cCell->state = 1;
+            cCell->doAdvance = 0;
+            /* number of (weighted) left neighbours for current cell */
+            size_t nCurrentWeights = 0;
+            /* Cells (doublets) in left ("from") layer are created since we
+             * iterate from left to right; append the neghbours list. If
+             * `fromLayerCellRefs` is null we are probably on the leftmost
+             * layer.
+             * Note, that after neighbours are added, they get sorted by
+             * weight *within a current tier* (so neighbours sorting are
+             * affected by topology -- closes are first). */
+            for( size_t i = 0; i < fromHit->refs.nUsed; ++i ) {
+                struct Cell * leftCellPtr = fromHit->refs.cells[i];
+                assert( leftCellPtr );
+                assert( leftCellPtr->to == fromHit );
+                /* Check triplet and create cells if test passed */
+                cats_Weight_t w = test_triplet_w( leftCellPtr->from->data
+                                                , fromHit->data
+                                                , toHit->data
+                                                , userData
+                                                );
+                if(w <= 0) continue;  /* no connection for negative weight */
+                /* append weights array */
+                if(nCurrentWeights == *weightBufferSizePtr) {
+                    struct WeightedNeighbour * newBufPtr
+                        = (struct WeightedNeighbour *) realloc( *weightBufferPtr
+                                                  , sizeof(struct WeightedNeighbour)
+                                                        *(*weightBufferSizePtr + CATS_BACKREF_REALLOC_STRIDE)
+                                                  );
+                    if( !newBufPtr ) {
+                        *catscErrNo = CATSC_ERROR_ALLOC_FAILURE_WEIGHTS;
+                        return NULL;  /* allocation failure */
+                    }
+                    *weightBufferPtr = newBufPtr;
+                    *weightBufferSizePtr += CATS_BACKREF_REALLOC_STRIDE;
+                }
+                (*weightBufferPtr)[nCurrentWeights].weight = w;
+                (*weightBufferPtr)[nCurrentWeights].cell = fromHit->refs.cells[i];
+                ++nCurrentWeights;
+            }
+            /* Unconditionally append to-hit refs */
+            if(!!(*catscErrNo = _cell_refs_add(&toHit->refs, cCell))) {
+                return NULL;  /* allocation failure */
+            }
+            if(0 == nCurrentWeights) {  /* no left neighbours to sort */
+                ++cCell;
+                continue;
+            }
+            if(1 == nCurrentWeights) {  /* add single neighbour and that's it */
+                if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, (*weightBufferPtr)[0].cell))) {
+                    return NULL;  /* allocation failure */
+                }
+                cCell->leftNeighbours.weights
+                    = (cats_Weight_t *) malloc(sizeof(cats_Weight_t));  // TODO: pool?
+                cCell->leftNeighbours.weights[0] = (*weightBufferPtr)[0].weight;
+                ++cCell;
+                continue;
+            }
+            /* sort left neigbours by weights (within the current tier of
+             * connectivity) */
+            qsort( *weightBufferPtr
+                 , nCurrentWeights
+                 , sizeof(struct WeightedNeighbour)
+                 , _compare_weighted_neighbours );
+            cCell->leftNeighbours.weights
+                = (cats_Weight_t *) malloc(nCurrentWeights*sizeof(cats_Weight_t));  // TODO: pool?
+            assert(cCell->leftNeighbours.weights);
+            /* copy left neighbours, in order */
+            for(size_t nw = 0; nw < nCurrentWeights; ++nw) {
+                if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, (*weightBufferPtr)[nw].cell))) {
+                    return NULL;  /* allocation failure */
+                }
+                assert(nw < cCell->leftNeighbours.nUsed);
+                assert(cCell->leftNeighbours.weights);
+                cCell->leftNeighbours.weights[nw] = (*weightBufferPtr)[nw].weight;
+            }
+            
+            /* shift "current cell" pointer */
+            ++cCell;
+        }
+    }
+    return cCell;
+}
+
+int
+cats_connect_w( struct cats_Layers * ls
+              , struct cats_CellsPool * a
+              , cats_WeightedFilter_t test_triplet
+              , void * userData
+              , cats_LayerNo_t nMissingLayers
+              ) {
+    assert(ls);
+    assert(a);
+    assert(ls->nLayers > 2);
+    ++nMissingLayers;
+    size_t nCellsNeed = 0;
+    int rc = _allocate_fully_connected_cells(ls, a, nMissingLayers, &nCellsNeed);
+    if(rc) return rc;
+    /* Create cells */
+    struct Cell * cCell = a->pool;  /* tracks last inserted cell */
+    size_t weightBufferNItems = 0;
+    struct WeightedNeighbour * weightBuffer = NULL;
+    for( cats_LayerNo_t toNLayer = 1
+       ; toNLayer < ls->nLayers
+       ; ++toNLayer ) {
+        for( cats_LayerNo_t fromNLayer = toNLayer - 1
+           ; toNLayer - fromNLayer <= nMissingLayers
+           ; --fromNLayer ) {
+            rc = 0;
+            assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
+            /* Create cells connecting this layer pair */
+            cCell = _connect_layers_w( cCell
+                                     , ls->layers + fromNLayer
+                                     , ls->layers + toNLayer
+                                     , test_triplet
+                                     , userData
+                                     , &weightBuffer
+                                     , &weightBufferNItems
+                                     , &rc
+                                     );
+            if(NULL == cCell) {
+                assert(rc);  /* _connect_layers() did not return error code */
+                if(weightBuffer) free(weightBuffer);
+                return rc;
+            }
+            if(0 == fromNLayer) break;
+        }
+    }
+    if(weightBuffer) free(weightBuffer);
+    return 0;
+}
+
+
+static int
+_advance_cell_state_if_need(struct Cell * cellPtr) {
+    for( size_t nRef = 0
+       ; nRef < cellPtr->leftNeighbours.nUsed
+       ; ++nRef ) {
+        if( cellPtr->leftNeighbours.cells[nRef]->state != cellPtr->state ) continue;
+        cellPtr->doAdvance = 1;
+    }
+    return cellPtr->doAdvance;
 }
 
 int
@@ -536,7 +755,16 @@ cats_evaluate( struct cats_Layers * ls, FILE * debugJSONStream) {
     return 0;
 }
 
-/*                          * * *   * * *   * * *                            */
+void
+reset_collection_flags( struct cats_CellsPool * pool ) {
+    for( size_t n = 0; n < pool->nCellsUsed; ++n ) {
+        pool->pool[n].doAdvance = 0x0;
+    }
+}
+
+/*                                                   _________________________
+ * _______________________________________________ / Collection strategies aux
+ */
 
 struct PointsStack {
     cats_HitData_t * data;
@@ -580,7 +808,9 @@ _stack_pull( struct PointsStack * stack ) {
     return datum;
 }
 
-/*                          * * *   * * *   * * *                            */
+/*                                            ________________________________
+ * ________________________________________ / Unweighted collection strategies
+ */
 
 static void
 _eval_from_excessive( struct Cell * cell
@@ -620,18 +850,20 @@ _eval_from_excessive( struct Cell * cell
     #endif
 }
 
-void
-cats_for_each_track_candidate_excessive( struct cats_Layers * ls
-                                       , unsigned int minLength
-                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                       , void * userdata
-                                       ) {
+int
+cats_visit_dfs_excessive( struct cats_Layers * ls
+                        , unsigned int minLength
+                        , void (*callback)(const cats_HitData_t *, size_t, void *)
+                        , void * userdata
+                        ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
     struct PointsStack stack;
     stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
     stack.nTop = -1;
-    /* evaluate traversing */
+    /* perform DF starting from the rightmost layer (shall contain highest
+     * states, omitting the leftmost one */
     for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
         struct Layer * l = ls->layers + nLayer;
         for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
@@ -657,13 +889,92 @@ cats_for_each_track_candidate_excessive( struct cats_Layers * ls
         }
     }
     free(stack.data);
+    return 0;
 }
 
-void
-reset_collection_flags( struct cats_CellsPool * pool ) {
-    for( size_t n = 0; n < pool->nCellsUsed; ++n ) {
-        pool->pool[n].doAdvance = 0x0;
+int
+cats_visit_dfs_excessive_w( struct cats_Layers * ls
+                          , unsigned int minLength
+                          , void (*callback)(const cats_HitData_t *, size_t, void *)
+                          , void * userdata
+                          ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* perform DF starting from the rightmost layer (shall contain highest
+     * states, omitting the leftmost one. For every layer collect cells for
+     * sorted left */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        /* For given layer, find highest link state to guarantee sorting
+         * within a certain state tier */
+        unsigned int maxStateOnThisLayer = 0;
+        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+            struct cats_Point * ptStart = l->points + nHit;
+            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                struct Cell * cell = ptStart->refs.cells[nLink];
+                if(maxStateOnThisLayer < cell->state) maxStateOnThisLayer = cell->state;
+            }
+        }
+        for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
+            assert(cState > 1);
+            size_t nNeighb = 0;
+            /* prepare array of links of current tier to start with */
+            for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+                struct cats_Point * ptStart = l->points + nHit;
+                for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                    struct Cell * cell = ptStart->refs.cells[nLink];
+                    if(cell->state != cState) continue;
+                    assert(cell->state > 1);
+                    assert(cell->leftNeighbours.nUsed);  /* state > 1, must have left neighbs */
+                    assert(cell->leftNeighbours.weights);  /* graph is not weighted */
+                    /* otherwise, copy cell to sort */
+                    if(nNeighb == nNeighbAllocated) {
+                        struct WeightedNeighbour * newwneighb
+                            = (struct WeightedNeighbour *)
+                                realloc( wneighb
+                                       , sizeof(struct WeightedNeighbour)*(nNeighbAllocated + CATS_BACKREF_REALLOC_STRIDE)
+                                       );
+                        if(!newwneighb) {
+                            return CATSC_ERROR_ALLOC_FAILURE_WEIGHTS;
+                        }
+                        nNeighbAllocated += CATS_BACKREF_REALLOC_STRIDE;
+                        wneighb = newwneighb;
+                    }
+                    wneighb[nNeighb].cell = cell;
+                    wneighb[nNeighb].weight = cell->leftNeighbours.weights[0];
+                    ++nNeighb;
+                }
+            }
+            printf(" xxx %zu\n", nNeighb);  // XXX
+            if(0 == nNeighb) continue;
+            if(nNeighb > 1)
+                qsort( wneighb
+                     , nNeighb
+                     , sizeof(struct WeightedNeighbour)
+                     , _compare_weighted_neighbours );
+            for(size_t i = 0; i < nNeighb; ++i) {
+                struct Cell * cCell = wneighb[i].cell;
+                _stack_push(&stack, cCell->to->data);
+                _eval_from_excessive(cCell, &stack, callback, userdata, minLength);
+                #ifdef NDEBUG
+                _stack_pull(&stack);
+                #else
+                assert(_stack_pull(&stack) == cCell->to->data);
+                #endif
+            }
+        }
     }
+    free(stack.data);
+    free(wneighb);
+    return 0;
 }
 
 /*                          * * *   * * *   * * *                            */
@@ -707,12 +1018,13 @@ _eval_from( struct Cell * cell
     #endif
 }
 
-void
-cats_for_each_track_candidate( struct cats_Layers * ls
-                             , unsigned int minLength
-                             , void (*callback)(const cats_HitData_t *, size_t, void *)
-                             , void * userdata
-                             ) {
+int
+cats_visit_dfs_moderate( struct cats_Layers * ls
+                       , unsigned int minLength
+                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                       , void * userdata
+                       ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
     struct PointsStack stack;
@@ -746,6 +1058,7 @@ cats_for_each_track_candidate( struct cats_Layers * ls
         }
     }
     free(stack.data);
+    return 0;
 }
 
 /*                          * * *   * * *   * * *                            */
@@ -811,12 +1124,13 @@ omit_subsequence:
     #endif
 }
 
-void
-cats_for_each_track_candidate_strict( struct cats_Layers * ls
-                                    , unsigned int minLength
-                                    , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                    , void * userdata
-                                    ) {
+int
+cats_visit_dfs_strict( struct cats_Layers * ls
+                     , unsigned int minLength
+                     , void (*callback)(const cats_HitData_t *, size_t, void *)
+                     , void * userdata
+                     ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
     struct PointsStack stack
@@ -854,6 +1168,7 @@ cats_for_each_track_candidate_strict( struct cats_Layers * ls
     }
     free(stack.data);
     free(prevStack.data);
+    return 0;
 }
 
 /*                          * * *   * * *   * * *                            */
@@ -861,6 +1176,7 @@ cats_for_each_track_candidate_strict( struct cats_Layers * ls
 static void
 _eval_from_l( struct Cell * cell
             , struct PointsStack * stack
+            , struct PointsStack * prevStack
             , void (*callback)(const cats_HitData_t *, size_t, void *)
             , void * userdata
             , unsigned int nMissingLayers
@@ -870,16 +1186,27 @@ _eval_from_l( struct Cell * cell
     cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
     _stack_push(stack, cell->from->data);
     if( 1 == cell->state && stack->nTop >= minLength ) {
+        /* same as for the strict */
+        if( prevStack->nTop <= stack->nTop || stack->nTop < 0 ) goto commit;
+        for( ssize_t i = 0; i <= stack->nTop; ++i ) {
+            int found = 0;
+            for( ssize_t j = 0; j <= prevStack->nTop; ++j ) {
+                if( prevStack->data[j] != stack->data[i] ) continue;
+                found = 1;
+                break;
+            }
+            if(found) continue;
+            goto commit;  /* current stack brought at least one uniq element */
+        }
+        goto omit_subsequence;
+commit:
         callback(stack->data, stack->nTop + 1, userdata);
         #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
         _print_stack(stack->nTop + 1);
         #endif
-        /* testing: mark when pushing, mark incoming cells with state <
-         * current as visited */
-        //for( size_t n = 0; n < cell->to->refs.nUsed; ++n ) {
-        //    if( cell->to->refs.cells[n]->state < cell->state )
-        //        cell->to->refs.cells[n]->doAdvance = 1;
-        //}
+        /* Copy stack for comparison */
+        prevStack->nTop = stack->nTop;
+        for(ssize_t n = 0; n <= stack->nTop; ++n) prevStack->data[n] = stack->data[n];
     } else {
         for(size_t expectedDiff = 1; expectedDiff < cell->state /*nMissingLayers + 1*/; ++expectedDiff ) {
             for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
@@ -892,7 +1219,7 @@ _eval_from_l( struct Cell * cell
                     _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
                     #endif
                     assert( neighb->to == cell->from );
-                    _eval_from_l(neighb, stack, callback, userdata, nMissingLayers, minLength);
+                    _eval_from_l(neighb, stack, prevStack, callback, userdata, nMissingLayers, minLength);
                 }
             }
         }
@@ -903,6 +1230,7 @@ _eval_from_l( struct Cell * cell
     //    _print_stack(stack->nTop + 1);
     //    #endif
     //}
+omit_subsequence:
     #ifdef NDEBUG
     _stack_pull(stack);
     #else
@@ -910,18 +1238,22 @@ _eval_from_l( struct Cell * cell
     #endif
 }
 
-void
-cats_for_each_longest_track_candidate( struct cats_Layers * ls
-                                     , unsigned int minLength
-                                     , unsigned int nMissingLayers
-                                     , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                     , void * userdata
-                                     ) {
+int
+cats_visit_dfs_longest( struct cats_Layers * ls
+                      , unsigned int minLength
+                      , unsigned int nMissingLayers
+                      , void (*callback)(const cats_HitData_t *, size_t, void *)
+                      , void * userdata
+                      ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
-    struct PointsStack stack;
+    struct PointsStack stack
+                     , prevStack
+                     ;
     stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
-    stack.nTop = -1;
+    prevStack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = prevStack.nTop = -1;
     /* evaluate traversing */
     for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
         struct Layer * l = ls->layers + nLayer;
@@ -940,7 +1272,7 @@ cats_for_each_longest_track_candidate( struct cats_Layers * ls
                 _gRootNMaxLinks = ptStart->refs.nUsed;
                 #endif
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from_l(cell, &stack, callback, userdata, nMissingLayers, minLength);
+                _eval_from_l(cell, &stack, &prevStack, callback, userdata, nMissingLayers, minLength);
             }
             #ifdef NDEBUG
             _stack_pull(&stack);
@@ -950,6 +1282,8 @@ cats_for_each_longest_track_candidate( struct cats_Layers * ls
         }
     }
     free(stack.data);
+    free(prevStack.data);
+    return 0;
 }
 
 /*                          * * *   * * *   * * *                            */
@@ -1024,13 +1358,14 @@ _eval_from_winning_l( struct Cell * cell
     return 0;
 }
 
-void
-cats_for_each_winning_track_candidate( struct cats_Layers * ls
-                                     , unsigned int minLength
-                                     , unsigned int nMissingLayers
-                                     , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                     , void * userdata
-                                     ) {
+int
+cats_visit_dfs_winning( struct cats_Layers * ls
+                      , unsigned int minLength
+                      , unsigned int nMissingLayers
+                      , void (*callback)(const cats_HitData_t *, size_t, void *)
+                      , void * userdata
+                      ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
     struct PointsStack stack;
@@ -1045,9 +1380,6 @@ cats_for_each_winning_track_candidate( struct cats_Layers * ls
             for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
                 struct Cell * cell = ptStart->refs.cells[nLink];
                 if(cell->state < minLength) continue;
-                // use `doAdvance' flag to mark visited cells
-                printf( "xxx %d,%d --%p--> : visited=%d\n"                          // XXX
-                      , (int) nLayer, (int) nHit, cell, (int) cell->doAdvance);   // XXX
                 if(cell->doAdvance) continue;  // omit "visited"
                 #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
                 _gRootLayerNo = nLayer;
@@ -1067,310 +1399,114 @@ cats_for_each_winning_track_candidate( struct cats_Layers * ls
         }
     }
     free(stack.data);
-}
-
-/*                          * * *   * * *   * * *                            */
-
-static void
-_eval_from_w( struct Cell * cell
-            , struct PointsStack * stack
-            , cats_WeightedFilter_t wf
-            , void * userdataFilter
-            , void (*callback)(const cats_HitData_t *, size_t, void *)
-            , void * userdata
-            , unsigned int nMissingLayers
-            , unsigned int minLength
-            ) {
-    assert(_stack_top(stack) == cell->to->data);
-    cell->doAdvance = 1;
-    _stack_push(stack, cell->from->data);
-    if( 1 == cell->state && stack->nTop >= minLength ) {
-        callback(stack->data, stack->nTop + 1, userdata);
-        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-        _print_stack(stack->nTop + 1);
-        #endif
-    } else {
-        /* Find out best link among concurrent ones for all depth */
-        double bestWeight = DBL_MIN;
-        struct Cell * bestCell = NULL;
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
-            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
-                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-                assert(stack->nTop > -1);
-                double w = wf( stack->data[stack->nTop]
-                             , neighb->from->data
-                             , neighb->to->data
-                             , userdataFilter );
-                if( w > bestWeight ) {
-                    bestWeight = w;
-                    bestCell = neighb;
-                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                    _gDbgStack[stack->nTop][0] = expectedDiff;
-                    _gDbgStack[stack->nTop][1] = nNeighb;
-                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
-                    #endif
-                }
-            }
-        }
-        /* Proceed with winner */
-        if(bestCell) {
-            assert( bestCell->to == cell->from );
-            _eval_from_w(bestCell, stack, wf, userdataFilter, callback, userdata
-                    , nMissingLayers, minLength);
-        }
-    }
-    #ifdef NDEBUG
-    _stack_pull(stack);
-    #else
-    assert(_stack_pull(stack) == cell->from->data);
-    #endif
-}
-
-void
-cats_for_each_track_candidate_w( struct cats_Layers * ls
-                               , unsigned int minLength
-                               , unsigned int nMissingLayers
-                               , cats_WeightedFilter_t wf
-                               , void * wfData
-                               , void (*callback)(const cats_HitData_t *, size_t, void *)
-                               , void * userdataCollect
-                               ) {
-    --minLength;
-    /* initialize traversing stack */
-    struct PointsStack stack;
-    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
-    stack.nTop = -1;
-    /* evaluate traversing */
-    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
-        struct Layer * l = ls->layers + nLayer;
-        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
-            struct cats_Point * ptStart = l->points + nHit;
-            _stack_push(&stack, ptStart->data);
-            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
-                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                _gRootLayerNo = nLayer;
-                _gRootNHit = nHit;
-                _gRootNLink = nLink;
-                _gRootNMaxLinks = ptStart->refs.nUsed;
-                #endif
-                struct Cell * cell = ptStart->refs.cells[nLink];
-                if(cell->state < minLength) continue;
-                // use `doAdvance' flag to mark visited cells
-                if(cell->doAdvance) continue;  // "visited"
-                assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from_w(cell, &stack, wf, wfData, callback, userdataCollect, nMissingLayers, minLength);
-            }
-            #ifdef NDEBUG
-            _stack_pull(&stack);
-            #else
-            assert(_stack_pull(&stack) == ptStart->data);
-            #endif
-        }
-    }
-    free(stack.data);
-}
-
-/*                          * * *   * * *   * * *                            */
-
-static void
-_eval_from_w_longest( struct Cell * cell
-                    , struct PointsStack * stack
-                    , cats_WeightedFilter_t wf
-                    , void * userdataFilter
-                    , void (*callback)(const cats_HitData_t *, size_t, void *)
-                    , void * userdata
-                    , unsigned int nMissingLayers
-                    , unsigned int minLength
-                    ) {
-    assert(_stack_top(stack) == cell->to->data);
-    cell->doAdvance = 1;
-    _stack_push(stack, cell->from->data);
-    if( 1 == cell->state && stack->nTop >= minLength ) {
-        callback(stack->data, stack->nTop + 1, userdata);
-        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-        _print_stack(stack->nTop + 1);
-        #endif
-    } else {
-        /* Find out best link among concurrent ones for all depth */
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
-            double bestWeight = DBL_MIN;
-            struct Cell * bestCell = NULL;
-            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
-                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-                assert(stack->nTop > -1);
-                double w = wf( stack->data[stack->nTop]
-                             , neighb->from->data
-                             , neighb->to->data
-                             , userdataFilter );
-                if( w > bestWeight ) {
-                    bestWeight = w;
-                    bestCell = neighb;
-                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                    _gDbgStack[stack->nTop][0] = expectedDiff;
-                    _gDbgStack[stack->nTop][1] = nNeighb;
-                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
-                    #endif
-                }
-            }
-            /* Proceed with winner at current depth */
-            if(bestCell) {
-                assert( bestCell->to == cell->from );
-                _eval_from_w_longest(bestCell, stack, wf, userdataFilter
-                        , callback, userdata, nMissingLayers, minLength);
-            }
-        }
-    }
-    #ifdef NDEBUG
-    _stack_pull(stack);
-    #else
-    assert(_stack_pull(stack) == cell->from->data);
-    #endif
-}
-
-void
-cats_for_each_longest_track_candidate_w( struct cats_Layers * ls
-                                       , unsigned int minLength
-                                       , unsigned int nMissingLayers
-                                       , cats_WeightedFilter_t wf
-                                       , void * wfData
-                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                       , void * userdataCollect
-                                       ) {
-    --minLength;
-    /* initialize traversing stack */
-    struct PointsStack stack;
-    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
-    stack.nTop = -1;
-    /* evaluate traversing */
-    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
-        struct Layer * l = ls->layers + nLayer;
-        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
-            struct cats_Point * ptStart = l->points + nHit;
-            _stack_push(&stack, ptStart->data);
-            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
-                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                _gRootLayerNo = nLayer;
-                _gRootNHit = nHit;
-                _gRootNLink = nLink;
-                _gRootNMaxLinks = ptStart->refs.nUsed;
-                #endif
-                struct Cell * cell = ptStart->refs.cells[nLink];
-                if(cell->state < minLength) continue;
-                // use `doAdvance' flag to mark visited cells
-                if(cell->doAdvance) continue;  // "visited"
-                assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                _eval_from_w_longest(cell, &stack, wf, wfData, callback
-                        , userdataCollect, nMissingLayers, minLength);
-            }
-            #ifdef NDEBUG
-            _stack_pull(&stack);
-            #else
-            assert(_stack_pull(&stack) == ptStart->data);
-            #endif
-        }
-    }
-    free(stack.data);
-}
-
-/*                          * * *   * * *   * * *                            */
-
-static int
-_eval_from_w_winning( struct Cell * cell
-                    , struct PointsStack * stack
-                    , cats_WeightedFilter_t wf
-                    , void * userdataFilter
-                    , void (*callback)(const cats_HitData_t *, size_t, void *)
-                    , void * userdata
-                    , unsigned int nMissingLayers
-                    , unsigned int minLength
-                    ) {
-    assert(_stack_top(stack) == cell->to->data);
-    cell->doAdvance = 1;
-    _stack_push(stack, cell->from->data);
-    if( 1 == cell->state && stack->nTop >= minLength ) {
-        callback(stack->data, stack->nTop + 1, userdata);
-        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-        _print_stack(stack->nTop + 1);
-        #endif
-        #ifdef NDEBUG
-        _stack_pull(stack);
-        #else
-        assert(_stack_pull(stack) == cell->from->data);
-        #endif
-        return 1;
-    } else {
-        /* Find out best link among concurrent ones for all depth */
-        for(size_t expectedDiff = 1; expectedDiff <= nMissingLayers + 1; ++expectedDiff ) {
-            double bestWeight = DBL_MIN;
-            struct Cell * bestCell = NULL;
-            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
-                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
-                assert(stack->nTop > -1);
-                double w = wf( stack->data[stack->nTop]
-                             , neighb->from->data
-                             , neighb->to->data
-                             , userdataFilter );
-                if( w > bestWeight ) {
-                    bestWeight = w;
-                    bestCell = neighb;
-                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                    _gDbgStack[stack->nTop][0] = expectedDiff;
-                    _gDbgStack[stack->nTop][1] = nNeighb;
-                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
-                    #endif
-                }
-            }
-            /* Proceed with winner at current depth */
-            if(bestCell) {
-                assert( bestCell->to == cell->from );
-                int won = _eval_from_w_winning( bestCell, stack, wf, userdataFilter
-                                              , callback, userdata, nMissingLayers, minLength);
-                if(won) {
-                    #ifdef NDEBUG
-                    _stack_pull(stack);
-                    #else
-                    assert(_stack_pull(stack) == cell->from->data);
-                    #endif
-                    return won;
-                }
-            }
-        }
-    }
-    if( stack->nTop >= minLength ) {
-        callback(stack->data, stack->nTop + 1, userdata);
-        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-        _print_stack(stack->nTop + 1);
-        #endif
-        #ifdef NDEBUG
-        _stack_pull(stack);
-        #else
-        assert(_stack_pull(stack) == cell->from->data);
-        #endif
-        cell->doAdvance = 1;  /* mark as visited ("remove" from set) */
-        return 1;
-    }
-    #ifdef NDEBUG
-    _stack_pull(stack);
-    #else
-    assert(_stack_pull(stack) == cell->from->data);
-    #endif
     return 0;
 }
 
-void
-cats_for_each_winning_track_candidate_w( struct cats_Layers * ls
-                                       , unsigned int minLength
-                                       , unsigned int nMissingLayers
-                                       , cats_WeightedFilter_t wf
-                                       , void * wfData
-                                       , void (*callback)(const cats_HitData_t *, size_t, void *)
-                                       , void * userdataCollect
-                                       ) {
+/* ... TODO: unweighted BFS visitors */
+
+/*                                              ______________________________
+ * __________________________________________ / Weighted collection strategies
+ */
+
+/* ... TODO: weighted wcessiva and moderate implems */
+
+/*                          * * *   * * *   * * *                            */
+
+#if 0
+static void
+_eval_from_strict_w( struct Cell * cell
+                   , struct PointsStack * stack
+                   , struct PointsStack * prevStack
+                   , void (*callback)(const cats_HitData_t *, size_t, void *)
+                   , void * userdata
+                   , cats_WeightedFilter_t wFilter
+                   , void * wFilterUserdata
+                   , unsigned int minLength
+                 ) {
+    assert(_stack_top(stack) == cell->to->data);
+    cell->doAdvance = 1;
+    _stack_push(stack, cell->from->data);
+    if( 1 == cell->state && stack->nTop >= minLength ) {
+        /* Compare current stack with previous successful one:
+         *  - if current is longer or has equal length, commit it (must be
+         *    different because of the graph properties)
+         *  - if current has at least one distinct element from prevous, commit
+         *    it. */
+        if( prevStack->nTop <= stack->nTop || stack->nTop < 0 ) goto commit;
+        for( ssize_t i = 0; i <= stack->nTop; ++i ) {
+            int found = 0;
+            for( ssize_t j = 0; j <= prevStack->nTop; ++j ) {
+                if( prevStack->data[j] != stack->data[i] ) continue;
+                found = 1;
+                break;
+            }
+            if(found) continue;
+            goto commit;  /* current stack brought at least one uniq element */
+        }
+        goto omit_subsequence;
+commit:
+        callback(stack->data, stack->nTop + 1, userdata);
+        #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+        _print_stack(stack->nTop + 1);
+        #endif
+        /* Copy stack for comparison */
+        prevStack->nTop = stack->nTop;
+        for(ssize_t n = 0; n <= stack->nTop; ++n) prevStack->data[n] = stack->data[n];
+    } else {
+        if( ! cell->leftNeighbours.weights ) {
+            /* Important note: to implement strict strategy based on previous
+             * stack we should preserve a feature of connected cells: closer
+             * cells are coming first in the "leftNeighbours" list. Otherwise,
+             * insertion sequence get broken and, say (3,1) (2,1) (1,1) with weight
+             * 0.1 will be visited (3,1) (1,1) with weight 0.9. To perform this we
+             * sort connections by tiers of their connectivity. */
+            cell->leftNeighbours.weights 
+                = (cats_Weight_t *) malloc(sizeof(cats_Weight_t)*cell->leftNeighbours.nUsed);
+            // ...
+        }   
+        for(size_t expectedDiff = 1; expectedDiff < cell->state; ++expectedDiff ) {
+            for( size_t nNeighb = 0; nNeighb < cell->leftNeighbours.nUsed; ++nNeighb ) {
+                struct Cell * neighb = cell->leftNeighbours.cells[nNeighb];
+                if( cell->state - neighb->state == expectedDiff ) {
+                    assert( neighb->to == cell->from );
+                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                    _gDbgStack[stack->nTop][0] = expectedDiff;
+                    _gDbgStack[stack->nTop][1] = nNeighb;
+                    _gDbgStack[stack->nTop][2] = cell->leftNeighbours.nUsed;
+                    #endif
+                    _eval_from_strict_w( neighb, stack, prevStack
+                                       , callback, userdata
+                                       , wFilter, wFilterUserdata
+                                       , minLength );
+                }
+            }
+        }
+    }
+omit_subsequence:
+    #ifdef NDEBUG
+    _stack_pull(stack);
+    #else
+    assert(_stack_pull(stack) == cell->from->data);
+    #endif
+}
+
+int
+cats_visit_dfs_strict_w( struct cats_Layers * ls
+                       , unsigned int minLength
+                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                       , void * userdata
+                       , cats_WeightedFilter_t wFilter
+                       , void * wFilterUserdata
+                       ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
-    struct PointsStack stack;
-    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
-    stack.nTop = -1;
+    struct PointsStack stack
+                     , prevStack
+                     ;
+    stack.data =     (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    prevStack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = prevStack.nTop = -1;
     /* evaluate traversing */
     for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
         struct Layer * l = ls->layers + nLayer;
@@ -1378,20 +1514,21 @@ cats_for_each_winning_track_candidate_w( struct cats_Layers * ls
             struct cats_Point * ptStart = l->points + nHit;
             _stack_push(&stack, ptStart->data);
             for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                struct Cell * cell = ptStart->refs.cells[nLink];
+                if(cell->state < minLength) continue;
+                // use `doAdvance' flag to mark visited cells
+                if(cell->doAdvance) continue;  // "visited"
                 #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
                 _gRootLayerNo = nLayer;
                 _gRootNHit = nHit;
                 _gRootNLink = nLink;
                 _gRootNMaxLinks = ptStart->refs.nUsed;
                 #endif
-                struct Cell * cell = ptStart->refs.cells[nLink];
-                if(cell->state < minLength) continue;
-                // use `doAdvance' flag to mark visited cells
-                if(cell->doAdvance) continue;  // "visited"
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
-                int won = _eval_from_w_winning( cell, &stack, wf, wfData, callback
-                                              , userdataCollect, nMissingLayers, minLength);
-                if(won) break;
+                _eval_from_strict_w( cell, &stack, &prevStack
+                                   , callback, userdata
+                                   , wFilter, wFilterUserdata
+                                   , minLength );
             }
             #ifdef NDEBUG
             _stack_pull(&stack);
@@ -1401,5 +1538,10 @@ cats_for_each_winning_track_candidate_w( struct cats_Layers * ls
         }
     }
     free(stack.data);
+    free(prevStack.data);
+    return 0;
 }
+#endif
+
+/*                          * * *   * * *   * * *                            */
 

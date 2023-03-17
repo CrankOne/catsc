@@ -28,7 +28,7 @@ struct HardLayer : public std::vector<const HardHit *> { };
 // Custom finder type to derive interface classes
 typedef catsc::TrackFinder<const HardHit *> CATSTrackFinder;
 // Checks triplet of hits vs "hard" topology
-struct HardFilter : public CATSTrackFinder::iTripletFilter {
+struct HardFilterUnweighted : public CATSTrackFinder::iTripletFilter {
     bool matches( const HardHit & a
                 , const HardHit & b
                 , const HardHit & c
@@ -40,6 +40,22 @@ struct HardFilter : public CATSTrackFinder::iTripletFilter {
         //          << " => " << (itAB != b.end()) << (itBC != c.end())       // XXX
         //          << std::endl;                                             // XXX
         return itAB != b.end() && itBC != c.end();
+    }
+};
+// Checks triplet of hits vs "hard" topology
+struct HardFilterWeighted : public CATSTrackFinder::iWeightedTripletFilter {
+    cats_Weight_t weight( const HardHit & a
+                        , const HardHit & b
+                        , const HardHit & c
+                        ) const override {
+        auto itAB = b.find(&a)
+           , itBC = c.find(&b)
+           ;
+        if( itAB == b.end() || itBC == c.end() ) return 0;
+        std::cout << "  weighting a=" << a << ", b=" << b << ", c=" << c    // XXX
+                  << " => " << itAB->second * itBC->second                  // XXX
+                  << std::endl;                                             // XXX
+        return itAB->second * itBC->second;
     }
 };
 namespace std {
@@ -269,7 +285,7 @@ _fill_random( std::vector<HardLayer> & layers //CATSTrackFinder & cats
 //                          * * *   * * *   * * *
 
 typedef
-    std::tuple<std::string, cats_LayerNo_t, cats_LayerNo_t>  // strategy, length, missed
+    std::tuple<std::string, cats_LayerNo_t, cats_LayerNo_t, bool>  // strategy, length, missed, weighted
     TestCaseKey;
 
 namespace std {
@@ -277,7 +293,9 @@ template <> struct hash<TestCaseKey> {
     std::size_t operator()(const TestCaseKey & k) const {
       return ((std::hash<std::string>()(std::get<0>(k))
                ^ (std::get<1>(k) << 1)) << 1)
-               ^ (std::get<2>(k) << 8);
+               ^ (std::get<2>(k) << 8)
+               ^ (std::get<3>(k) ? 0x24 : 0x188)
+               ;
     }
 };
 }  // namespace std
@@ -288,7 +306,7 @@ class ExpectedCases : public std::unordered_map< TestCaseKey
 static const std::regex gRxGraphLine (
     R"~(\s*(\d+)\s*,\s*(\d+)\s*->\s*(\d+)\s*,\s*(\d+)\s*\:\s*(\d+\.\d+)\s*)~");
 static const std::regex gRxStartCaseLine (
-    R"~(\s*CASE\s+([a-z]+)\s+length\s+(\d+)\s+missed\s+(\d+)\s*)~");
+    R"~(\s*CASE\s+([a-z]+)\s+length\s+(\d+)\s+missed\s+(\d+)\s+(un)?weighted\s*)~");
 static const std::regex gRxCaseItem (
     R"~(\s*(\d+)\s*,\s*(\d+)\s*)~");
 
@@ -303,6 +321,8 @@ _read_test_cases ( std::ifstream & ifs
     // this is for case reading
     std::string cStrategy;
     cats_LayerNo_t nMissed = 0, minLength = 0;
+    bool weighted = false;
+
     size_t nTestCaseItem;
     ExpectedConnections expConnsStrat;  // reentrant fill buffer
     // iterate over lines
@@ -316,10 +336,11 @@ _read_test_cases ( std::ifstream & ifs
         std::smatch match;
         if(!cStrategy.empty()) {  // if we're in test case block, read line as item
             if( line == "ENDCASE" ) {  // note: sensitive to whitespaces
-                auto ir = expConns.emplace( std::tuple<std::string, cats_LayerNo_t, cats_LayerNo_t>{
+                auto ir = expConns.emplace( TestCaseKey{
                                               cStrategy
                                             , nMissed
                                             , minLength
+                                            , weighted
                                             }
                                     , expConnsStrat );
                 if(!ir.second) {
@@ -330,6 +351,7 @@ _read_test_cases ( std::ifstream & ifs
                 }
                 cStrategy.clear();
                 nMissed = minLength = 0;
+                weighted = false;
                 continue;
             }
             std::smatch sm;
@@ -351,6 +373,7 @@ _read_test_cases ( std::ifstream & ifs
             cStrategy = toks [1];
             minLength = std::stoi(toks[2]);
             nMissed = std::stoi(toks[3]);
+            weighted = toks[4].empty();
             nTestCaseItem = 0;
             expConnsStrat.clear();
             continue;
@@ -442,6 +465,7 @@ struct AppCfg {
     int nMissedLayers
       , nMinLength
       ;
+    bool weighted;
     FILE * debugJSONStream;
     bool verbose;
 
@@ -464,6 +488,7 @@ _set_defaults( AppCfg & cfg ) {
     cfg.mode = '\0';
     cfg.nMissedLayers = 1;
     cfg.nMinLength = 3;
+    cfg.weighted = false;
     cfg.debugJSONStream = NULL;
     cfg.verbose = false;
 
@@ -506,6 +531,7 @@ _usage_info( std::ostream & os
           " number of hits on the found track candidates." << std::endl
        << "  -w <#hits=" << cfg.nMissedLayers << "> number of tolerated missed"
           " (inefficient) layers." << std::endl
+       << "  -W enables weighted connection procedure." << std::endl
        << "  -D <debugJSONStream> when set, debug JSON will be generated by"
           " given path."
        << std::endl
@@ -517,7 +543,7 @@ _configure_app( int argc, char * argv[]
               , AppCfg & cfg
               ) {
     int opt;
-    while ((opt = getopt(argc, argv, "hvai:s:N:n:m:l:w:D:")) != -1) {
+    while ((opt = getopt(argc, argv, "hvaWi:s:N:n:m:l:w:D:")) != -1) {
         switch (opt) {
         case 'h':
             _usage_info(std::cout, argv[0], cfg);
@@ -534,6 +560,9 @@ _configure_app( int argc, char * argv[]
             break;
         case 'w':
             cfg.nMissedLayers = std::stoi(optarg);
+            break;
+        case 'W':
+            cfg.weighted = true;
             break;
         case 'D':
             cfg.debugJSONStream = fopen(optarg, "w");
@@ -693,7 +722,7 @@ main(int argc, char * argv[]) {
 
     std::unordered_set<TestCaseKey> keys;
     if(!cfg.mtdDep.readOpts.testAll) {
-        keys.emplace(TestCaseKey{cfg.method, cfg.nMissedLayers, cfg.nMinLength});
+        keys.emplace(TestCaseKey{cfg.method, cfg.nMissedLayers, cfg.nMinLength, cfg.weighted});
     } else {
         if(expConns.empty()) {
             std::cerr << "WARNING: can't perform all tests as file does not"
@@ -725,14 +754,26 @@ main(int argc, char * argv[]) {
                     << std::endl;
             collector.expected = control->second;
         }
-        HardFilter filter;
         bool evaluated = false;
         const cats_LayerNo_t thisNMissing = std::get<1>(k)
                            , thisLength = std::get<2>(k)
                            ;
         const std::string thisMethod = std::get<0>(k);
+        const bool weighted = std::get<3>(k);
+
+        //HardFilterUnweighted filter;
+        CATSTrackFinder::iTripletFilterBase * filterBase = nullptr;
+        if(!weighted) {
+            filterBase = new HardFilterUnweighted();
+        } else {
+            filterBase = new HardFilterWeighted();
+        }
+
         try {
-            evaluated = cats.evaluate(filter, thisNMissing);
+            if(!weighted)
+                evaluated = cats.evaluate(*static_cast<HardFilterUnweighted *>(filterBase), thisNMissing);
+            else
+                evaluated = cats.evaluate(*static_cast<HardFilterWeighted *>(filterBase), thisNMissing);
         } catch( std::bad_alloc & e ) {
             std::cerr << "Bad allocation: " << e.what()
                       << "; last C return code: " << cats.c_retcode()
@@ -781,6 +822,8 @@ main(int argc, char * argv[]) {
                 ++nEntry;
             }
         }
+        if(filterBase)
+            delete filterBase;
     }  // modes loop
     if(cfg.debugJSONStream) {
         fclose(cfg.debugJSONStream);

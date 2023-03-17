@@ -83,8 +83,14 @@ class TrackFinder : protected HitDataTraits<HitDataT>::CacheType
                   , public BaseTrackFinder
                   {
 public:
+    struct iTripletFilterBase {
+        const bool weighted;
+        iTripletFilterBase(bool isWeighted) : weighted(isWeighted) {}
+        virtual ~iTripletFilterBase() {}
+    };
     /// Base class for hit triplet filtering functor
-    struct iTripletFilter {
+    struct iTripletFilter : public iTripletFilterBase {
+        iTripletFilter() : iTripletFilterBase(false) {}
         /// Should return whether triplet is possibly describes a segment of
         /// a track based on IDs and coordinates of three points. Lifetime of
         /// the provided ptrs is valid until `reset()` call.
@@ -94,7 +100,8 @@ public:
                             ) const = 0;
     };
     /// Base class for weighted hit triplet functor
-    struct iWeightedTripletFilter {
+    struct iWeightedTripletFilter : public iTripletFilterBase {
+        iWeightedTripletFilter() : iTripletFilterBase(true) {}
         /// Sould return weight value for given triplet
         virtual float weight( typename HitDataTraits<HitDataT>::HitInfo_t
                             , typename HitDataTraits<HitDataT>::HitInfo_t
@@ -118,11 +125,11 @@ private:
                                  , void * filter_
                                  );
     /// C callback implem applying weighted filter
-    static double c_f_wrapper_wfilter( cats_HitData_t c1
-                                     , cats_HitData_t c2
-                                     , cats_HitData_t c3
-                                     , void * filter_
-                                     );
+    static cats_Weight_t c_f_wrapper_wfilter( cats_HitData_t c1
+                                            , cats_HitData_t c2
+                                            , cats_HitData_t c3
+                                            , void * filter_
+                                            );
 
     /// If set, inctance is ready to produce tracks
     bool _evaluated;
@@ -139,17 +146,31 @@ private:
     /// Last return code of C procedure
     int _rc;
 protected:
-    /// Evaluates the automaton.
+    /// Connects the layers and evaluates the automaton.
     ///
     /// \throw `std::bad_alloc` on memory error
-    bool _evaluate(iTripletFilter & filter, cats_LayerNo_t nMissingLayers) {
+    bool _evaluate(iTripletFilterBase & filter_, cats_LayerNo_t nMissingLayers) {
         if( _debugJSONStream ) fputs("},\"its\":[", _debugJSONStream);
-        if(!!(_rc = cats_connect(_layers
+
+        if(!filter_.weighted) {
+            auto & filter = static_cast<iTripletFilter&>(filter_);
+            _rc = cats_connect( _layers
+                              , _cells
+                              , TrackFinder<HitDataT>::c_f_wrapper_filter
+                              , &filter
+                              , nMissingLayers
+                              );
+        } else {
+            auto & filter = static_cast<iWeightedTripletFilter&>(filter_);
+            _rc = cats_connect_w( _layers
                                 , _cells
-                                , TrackFinder<HitDataT>::c_f_wrapper_filter
+                                , TrackFinder<HitDataT>::c_f_wrapper_wfilter
                                 , &filter
                                 , nMissingLayers
-                                )) ) {
+                                );
+        }
+
+        if(_rc) {
             if(_rc == CATSC_RC_EMPTY_GRAPH ) {
                 _evaluated = true;
                 return false;  // filter discriminated all
@@ -183,20 +204,20 @@ public:
     ///
     /// \throw `std::bad_alloc` if failed to allocate memory for layers or cells
     TrackFinder( cats_LayerNo_t nLayers
-                   , size_t softLimitCells=10000
-                   , size_t softLimitHits=100
-                   , size_t softLimitRefs=1000
-                   , FILE * debugJSONStream=nullptr
-                   ) : _nLayers(nLayers)
-                     , _softLimitCells(softLimitCells)
-                     , _softLimitHits(softLimitHits)
-                     , _softLimitRefs(softLimitRefs)
-                     , _evaluated(false)
-                     , _lastNMissing(0)
-                     , _debugJSONStream(debugJSONStream)
-                     , _isFirstHit(true)
-                     , _rc(0)
-                     {
+               , size_t softLimitCells=10000
+               , size_t softLimitHits=100
+               , size_t softLimitRefs=1000
+               , FILE * debugJSONStream=nullptr
+               ) : _nLayers(nLayers)
+                 , _softLimitCells(softLimitCells)
+                 , _softLimitHits(softLimitHits)
+                 , _softLimitRefs(softLimitRefs)
+                 , _evaluated(false)
+                 , _lastNMissing(0)
+                 , _debugJSONStream(debugJSONStream)
+                 , _isFirstHit(true)
+                 , _rc(0)
+                 {
         if( nLayers < 3 ) {
             throw std::runtime_error("Bad number of layers requested (<3).");
         }
@@ -240,8 +261,8 @@ public:
     /// Returns number of hits added to layer N
     size_t n_points(cats_LayerNo_t nLayer) { return cats_layer_n_points(_layers, nLayer); }
 
-    /// Evaluates automaton; prepares connection graph for track collection
-    bool evaluate( iTripletFilter & filter
+    /// Evaluates automaton; prepares connection graph for tracks collection
+    bool evaluate( iTripletFilterBase & filter
                  , cats_LayerNo_t nMissingLayers ) {
         if(_evaluated) {
             cats_cells_pool_reset( _layers
@@ -266,9 +287,10 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_track_candidate_excessive(_layers, minLength
+        int rc = cats_visit_dfs_excessive_w(_layers, minLength  // TODO: not weighted!
                 , c_f_wrapper_collect, &collector);
         collector.done();
+        if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         _wasCollected = true;
     }
 
@@ -283,8 +305,9 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_track_candidate(_layers, minLength/*, _lastNMissing*/
+        int rc = cats_visit_dfs_moderate(_layers, minLength/*, _lastNMissing*/
                 , c_f_wrapper_collect, &collector);
+        if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
 
@@ -299,25 +322,9 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_track_candidate_strict(_layers, minLength/*, _lastNMissing*/
+        int rc = cats_visit_dfs_strict(_layers, minLength/*, _lastNMissing*/
                 , c_f_wrapper_collect, &collector);
-        collector.done();
-    }
-
-    ///\brief Collects all track candidates permitted by the weighted filter
-    ///
-    /// Forwards execution to `cats_for_each_track_candidate_w()` (see docs).
-    void collect( iTrackCandidateCollector & collector
-                , cats_LayerNo_t minLength
-                , iWeightedTripletFilter & wf
-                ) {
-        if(!_evaluated)
-            throw std::runtime_error("CATS was not evaluated, unable to collect.");
-        if(_wasCollected)
-            _reset_collection_flags();
-        cats_for_each_track_candidate_w(_layers, minLength, _lastNMissing
-                , c_f_wrapper_wfilter, &wf
-                , c_f_wrapper_collect, &collector);
+        if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
 
@@ -332,26 +339,9 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_longest_track_candidate(_layers, minLength, _lastNMissing
-                                             , c_f_wrapper_collect, &collector);
-        collector.done();
-    }
-
-        ///\brief Collects longest track candidates permitted by the filter
-    ///
-    /// Forwards execution to `cats_for_each_longest_track_candidate_w()` that
-    /// might be insufficient or imprecise (see docs).
-    void collect_longest( iTrackCandidateCollector & collector
-                        , cats_LayerNo_t minLength
-                        , iWeightedTripletFilter & wf
-                        ) {
-        if(!_evaluated)
-            throw std::runtime_error("CATS was not evaluated, unable to collect.");
-        if(_wasCollected)
-            _reset_collection_flags();
-        cats_for_each_longest_track_candidate_w(_layers, minLength, _lastNMissing
-                    , c_f_wrapper_wfilter, &wf
-                    , c_f_wrapper_collect, &collector);
+        int rc = cats_visit_dfs_longest( _layers, minLength, _lastNMissing
+                                       , c_f_wrapper_collect, &collector);
+        if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
 
@@ -366,26 +356,8 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_for_each_winning_track_candidate(_layers, minLength, _lastNMissing
-                                             , c_f_wrapper_collect, &collector);
-        collector.done();
-    }
-
-    ///\brief Collects winning track candidates permitted by the weighted filter
-    ///
-    /// Forwards execution to `cats_for_each_winning_track_candidate_w()` that
-    /// might be insufficient or imprecise (see docs).
-    void collect_winning( iTrackCandidateCollector & collector
-                        , cats_LayerNo_t minLength
-                        , iWeightedTripletFilter & wf
-                        ) {
-        if(!_evaluated)
-            throw std::runtime_error("CATS was not evaluated, unable to collect.");
-        if(_wasCollected)
-            _reset_collection_flags();
-        cats_for_each_winning_track_candidate_w(_layers, minLength, _lastNMissing
-                    , c_f_wrapper_wfilter, &wf
-                    , c_f_wrapper_collect, &collector);
+        cats_visit_dfs_winning( _layers, minLength, _lastNMissing
+                              , c_f_wrapper_collect, &collector);
         collector.done();
     }
 
@@ -413,12 +385,12 @@ TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
                  ) ? 1 : 0;
 }
 
-template<typename HitDataT> double
+template<typename HitDataT> cats_Weight_t
 TrackFinder<HitDataT>::c_f_wrapper_wfilter( cats_HitData_t c1
                                           , cats_HitData_t c2
                                           , cats_HitData_t c3
                                           , void * filter_
-                                         ) {
+                                          ) {
     return reinterpret_cast<typename TrackFinder<HitDataT>::iWeightedTripletFilter *>(filter_)
         ->weight( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
                 , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)

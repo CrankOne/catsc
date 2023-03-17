@@ -173,7 +173,7 @@ main(int argc, char * argv[]) {
     fclose(outf);
 
     tcws.outfile = fopen("/tmp/tracklets.dat", "w");
-    cats_for_each_track_candidate(acc, 3, _write_cands, &tcws);
+    cats_visit_dfs_moderate(acc, 3, _write_cands, &tcws);
     fclose(tcws.outfile);
 
     cats_cells_pool_delete(cats);

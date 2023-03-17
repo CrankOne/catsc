@@ -1,0 +1,68 @@
+# Simple test to check weighted iterations
+#
+#   ==== 0 ==== #3
+#        |
+#   ==== 0 ==== #2
+#      /   \
+#   = 0 === 1 = #1
+#      \   /
+#   ==== 0 ==== #0
+# 
+# For unweighted case the algorithm must prefer 0,0 over 0,1, for weighted
+# vice versa. This case is a bit simpler that 3-layered case as it only involve
+# weights concurrency during the connection stage (not while visiting).
+
+0,0 -> 1,0 : 0.1
+0,0 -> 1,1 : 0.9
+1,0 -> 2,0 : 0.1
+1,1 -> 2,0 : 0.9
+2,0 -> 3,0 : 1.0
+
+CASE excessive length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE excessive length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE moderate length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE moderate length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE strict length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE strict length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE longest length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+    3,0  2,0  1,1  0,0
+ENDCASE
+
+CASE longest length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE winning length 4 missed 0 unweighted
+    3,0  2,0  1,0  0,0
+ENDCASE
+
+CASE winning length 4 missed 0 weighted
+    3,0  2,0  1,1  0,0
+ENDCASE
+
