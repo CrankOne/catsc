@@ -164,7 +164,7 @@ main(int argc, char * argv[]) {
     }
 
     cats_CellsPool * cats = cats_cells_pool_create(4);
-    float angleThreshold = .95*M_PI;
+    float angleThreshold = .99*M_PI;
     cats_connect(acc, cats, by_angle_filter, &angleThreshold, 1);
     cats_evaluate(acc, NULL);
 
@@ -173,7 +173,7 @@ main(int argc, char * argv[]) {
     fclose(outf);
 
     tcws.outfile = fopen("/tmp/tracklets.dat", "w");
-    cats_visit_dfs_moderate(acc, 3, _write_cands, &tcws);
+    cats_visit_dfs_excessive(acc, 3, _write_cands, &tcws);
     fclose(tcws.outfile);
 
     cats_cells_pool_delete(cats);

@@ -223,6 +223,9 @@ cats_layer_n_points( const struct cats_Layers * lsPtr
 void
 cats_layers_reset( struct cats_Layers * ls, size_t softLimitHits ) {
     for( cats_LayerNo_t i = 0; i < ls->nLayers; ++i ) {
+        for(size_t nPoint = 0; nPoint < ls->layers[i].nPointsAllocated; ++nPoint) {
+            _cell_refs_free( &ls->layers[i].points[nPoint].refs );
+        }
         _layer_reset(ls->layers + i, softLimitHits);
     }
 }
@@ -355,7 +358,18 @@ cats_cells_pool_reset( struct cats_Layers * ls
 
 void
 cats_cells_pool_delete( struct cats_CellsPool * a ) {
-    if(a->pool) free(a->pool);
+    if(a->pool) {
+        //for( size_t nln = 0; nln < l->points[nPoint].refs.nUsed; ++nln ) {
+        //    _cell_refs_free( &((*l->points[nPoint].refs.cells)[nln].leftNeighbours) );
+        //}
+        for( size_t i = 0; i < a->nCellsAllocated; ++i ) {
+            if(a->pool[i].leftNeighbours.nAllocated)
+                _cell_refs_free( &(a->pool[i].leftNeighbours) );
+            if(a->pool[i].weights)
+                free(a->pool[i].weights);
+        }
+        free(a->pool);
+    }
     a->nCellsAllocated = a->nCellsUsed = 0;
     free(a);
 }
@@ -395,7 +409,8 @@ _allocate_fully_connected_cells( struct cats_Layers * ls
                                      , nCellsNeed * sizeof(struct Cell) );
         if( !newCells ) return CATSC_ERROR_ALLOC_FAILURE_CELLS;
         a->pool = newCells;
-        /* initialize newly allocated cells for use */
+        /* initialize newly allocated cells for use
+         * NOTE: all allocated cells will be initialized, not only ones used. */
         for( size_t nCell = a->nCellsAllocated
            ; nCell < nCellsNeed
            ; ++nCell ) {
@@ -1140,6 +1155,7 @@ cats_visit_dfs_moderate_w( struct cats_Layers * ls
         }
     }
     free(stack.data);
+    free(wneighb);
     return 0;
 }
 
@@ -1297,6 +1313,7 @@ cats_visit_dfs_strict_w( struct cats_Layers * ls
             }
         }
     }
+    free(wneighb);
     free(stack.data);
     free(prevStack.data);
     return 0;
@@ -1450,6 +1467,7 @@ cats_visit_dfs_longest_w( struct cats_Layers * ls
             }
         }
     }
+    free(wneighb);
     free(stack.data);
     free(prevStack.data);
     return 0;
@@ -1640,6 +1658,7 @@ cats_visit_dfs_winning_w( struct cats_Layers * ls
         }
         #endif
     }
+    free(wneighb);
     free(stack.data);
     return 0;
 }

@@ -37,7 +37,12 @@ template<typename DataT> struct HitDataTraits {
         cacheRef.push_back(localCopyPtr);
         return localCopyPtr;
     }
-    static void reset(CacheType & cacheRef) { cacheRef.clear(); }
+    static void reset(CacheType & cacheRef) {
+        for(auto & ptr : cacheRef) {
+            delete ptr;
+        }
+        cacheRef.clear();
+    }
     typedef const DataT * HitInfoPtr_t;
 };
 
@@ -220,6 +225,7 @@ public:
                  , _lastNMissing(0)
                  , _debugJSONStream(debugJSONStream)
                  , _isFirstHit(true)
+                 , _wasCollected(false)
                  , _rc(0)
                  {
         if( nLayers < 3 ) {
@@ -231,8 +237,10 @@ public:
         if(!_cells) throw std::bad_alloc();  // failed to allocate cells pool
         if( _debugJSONStream ) fputs("{\"dict\":{", _debugJSONStream);
     }
+
     /// dtr, pretty strightforward one.
     ~TrackFinder() {
+        reset();
         cats_layers_delete(_layers);
         cats_cells_pool_delete(_cells);
     }
