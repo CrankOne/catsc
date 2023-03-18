@@ -145,6 +145,8 @@ private:
     bool _wasCollected;
     /// Last return code of C procedure
     int _rc;
+    /// Whether the the weighted connection graph is built
+    bool _isWeightedGraph;
 protected:
     /// Connects the layers and evaluates the automaton.
     ///
@@ -154,6 +156,7 @@ protected:
 
         if(!filter_.weighted) {
             auto & filter = static_cast<iTripletFilter&>(filter_);
+            _isWeightedGraph = false;
             _rc = cats_connect( _layers
                               , _cells
                               , TrackFinder<HitDataT>::c_f_wrapper_filter
@@ -162,6 +165,7 @@ protected:
                               );
         } else {
             auto & filter = static_cast<iWeightedTripletFilter&>(filter_);
+            _isWeightedGraph = true;
             _rc = cats_connect_w( _layers
                                 , _cells
                                 , TrackFinder<HitDataT>::c_f_wrapper_wfilter
@@ -287,8 +291,14 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        int rc = cats_visit_dfs_excessive_w(_layers, minLength  // TODO: not weighted!
+        int rc;
+        if(_isWeightedGraph) {
+            rc = cats_visit_dfs_excessive_w(_layers, minLength
                 , c_f_wrapper_collect, &collector);
+        } else {
+            rc = cats_visit_dfs_excessive(_layers, minLength
+                , c_f_wrapper_collect, &collector);
+        }
         collector.done();
         if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         _wasCollected = true;
@@ -305,8 +315,14 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        int rc = cats_visit_dfs_moderate(_layers, minLength/*, _lastNMissing*/
-                , c_f_wrapper_collect, &collector);
+        int rc;
+        if(_isWeightedGraph) {
+            rc = cats_visit_dfs_moderate_w(_layers, minLength
+                                          , c_f_wrapper_collect, &collector);
+        } else {
+            rc = cats_visit_dfs_moderate(_layers, minLength
+                                        , c_f_wrapper_collect, &collector);
+        }
         if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
@@ -322,8 +338,14 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        int rc = cats_visit_dfs_strict(_layers, minLength/*, _lastNMissing*/
+        int rc;
+        if(_isWeightedGraph) {
+            rc = cats_visit_dfs_strict_w(_layers, minLength
                 , c_f_wrapper_collect, &collector);
+        } else {
+            rc = cats_visit_dfs_strict(_layers, minLength
+                , c_f_wrapper_collect, &collector);
+        }
         if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
@@ -339,8 +361,14 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        int rc = cats_visit_dfs_longest( _layers, minLength, _lastNMissing
+        int rc;
+        if(_isWeightedGraph) {
+            rc = cats_visit_dfs_longest_w( _layers, minLength, _lastNMissing
                                        , c_f_wrapper_collect, &collector);
+        } else {
+            rc = cats_visit_dfs_longest( _layers, minLength, _lastNMissing
+                                       , c_f_wrapper_collect, &collector);
+        }
         if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
         collector.done();
     }
@@ -356,8 +384,13 @@ public:
             throw std::runtime_error("CATS was not evaluated, unable to collect.");
         if(_wasCollected)
             _reset_collection_flags();
-        cats_visit_dfs_winning( _layers, minLength, _lastNMissing
+        if(_isWeightedGraph) {
+            cats_visit_dfs_winning_w( _layers, minLength, _lastNMissing
+                                  , c_f_wrapper_collect, &collector);
+        } else {
+            cats_visit_dfs_winning( _layers, minLength, _lastNMissing
                               , c_f_wrapper_collect, &collector);
+        }
         collector.done();
     }
 

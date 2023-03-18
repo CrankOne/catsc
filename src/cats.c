@@ -633,7 +633,6 @@ _connect_layers_w( struct Cell * cCell
                 assert(nw < cCell->leftNeighbours.nUsed);
                 assert(cCell->weights);
                 cCell->weights[nw] = (*weightBufferPtr)[nw].weight;
-                printf( " xxx %f\n", (*weightBufferPtr)[nw].weight );
             }
             /* shift "current cell" pointer */
             ++cCell;
@@ -888,6 +887,69 @@ cats_visit_dfs_excessive( struct cats_Layers * ls
     return 0;
 }
 
+/* Auxiliary procedure building weighted index of cells at current tier */
+static int
+_sort_links_of_tier( struct WeightedNeighbour ** weightedCellsPtr
+                   , size_t * nWeightedCellsAllocd
+                   , unsigned int cState
+                   , struct Layer * l
+                   , size_t * nNeighbPtr
+                   , unsigned int flags
+                   ) {
+    assert(cState > 1);
+    assert(weightedCellsPtr);
+    assert(l);
+    assert(nNeighbPtr);
+    *nNeighbPtr = 0;
+    /* prepare array of links of current tier to start with */
+    for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+        struct cats_Point * ptStart = l->points + nHit;
+        for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+            struct Cell * cell = ptStart->refs.cells[nLink];
+            if( (flags & 0x1) && cell->doAdvance) continue;  /* omit visited if need */
+            if(cell->state != cState) continue;
+            assert(cell->state > 1);
+            assert(cell->leftNeighbours.nUsed);  /* state > 1, must have left neighbs */
+            assert(cell->weights);  /* graph is not weighted */
+            /* otherwise, copy cell to sort */
+            if(*nNeighbPtr == *nWeightedCellsAllocd) {
+                struct WeightedNeighbour * newwneighb
+                    = (struct WeightedNeighbour *)
+                        realloc( *weightedCellsPtr
+                               , sizeof(struct WeightedNeighbour)*(
+                                   *nWeightedCellsAllocd + CATS_BACKREF_REALLOC_STRIDE)
+                               );
+                if(!newwneighb) return CATSC_ERROR_ALLOC_FAILURE_WEIGHTS;
+                *nWeightedCellsAllocd += CATS_BACKREF_REALLOC_STRIDE;
+                *weightedCellsPtr = newwneighb;
+            }
+            (*weightedCellsPtr)[*nNeighbPtr].cell = cell;
+            (*weightedCellsPtr)[*nNeighbPtr].weight = cell->weights[0];
+            ++(*nNeighbPtr);
+        }
+    }
+    if(*nNeighbPtr > 1)
+        qsort( *weightedCellsPtr
+             , *nNeighbPtr
+             , sizeof(struct WeightedNeighbour)
+             , _compare_weighted_neighbours );
+    return 0;
+}
+
+unsigned int
+_max_state_on_layer(struct Layer * l, unsigned int flags) {
+    unsigned int maxStateOnThisLayer = 0;
+    for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+        struct cats_Point * ptStart = l->points + nHit;
+        for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+            struct Cell * cell = ptStart->refs.cells[nLink];
+            if( (flags & 0x1) && cell->doAdvance) continue;  /* omit visited if need */
+            if(maxStateOnThisLayer < cell->state) maxStateOnThisLayer = cell->state;
+        }
+    }
+    return maxStateOnThisLayer;
+}
+
 int
 cats_visit_dfs_excessive_w( struct cats_Layers * ls
                           , unsigned int minLength
@@ -911,53 +973,23 @@ cats_visit_dfs_excessive_w( struct cats_Layers * ls
         struct Layer * l = ls->layers + nLayer;
         /* For given layer, find highest link state to guarantee sorting
          * within a certain state tier */
-        unsigned int maxStateOnThisLayer = 0;
-        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
-            struct cats_Point * ptStart = l->points + nHit;
-            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
-                struct Cell * cell = ptStart->refs.cells[nLink];
-                if(maxStateOnThisLayer < cell->state) maxStateOnThisLayer = cell->state;
-            }
-        }
+        unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x0);
         for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
-            assert(cState > 1);
             size_t nNeighb = 0;
-            /* prepare array of links of current tier to start with */
-            for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
-                struct cats_Point * ptStart = l->points + nHit;
-                for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
-                    struct Cell * cell = ptStart->refs.cells[nLink];
-                    if(cell->state != cState) continue;
-                    assert(cell->state > 1);
-                    assert(cell->leftNeighbours.nUsed);  /* state > 1, must have left neighbs */
-                    assert(cell->weights);  /* graph is not weighted */
-                    /* otherwise, copy cell to sort */
-                    if(nNeighb == nNeighbAllocated) {
-                        struct WeightedNeighbour * newwneighb
-                            = (struct WeightedNeighbour *)
-                                realloc( wneighb
-                                       , sizeof(struct WeightedNeighbour)*(nNeighbAllocated + CATS_BACKREF_REALLOC_STRIDE)
-                                       );
-                        if(!newwneighb) {
-                            return CATSC_ERROR_ALLOC_FAILURE_WEIGHTS;
-                        }
-                        nNeighbAllocated += CATS_BACKREF_REALLOC_STRIDE;
-                        wneighb = newwneighb;
-                    }
-                    wneighb[nNeighb].cell = cell;
-                    wneighb[nNeighb].weight = cell->weights[0];
-                    ++nNeighb;
-                }
-            }
-            if(0 == nNeighb) continue;
-            if(nNeighb > 1)
-                qsort( wneighb
-                     , nNeighb
-                     , sizeof(struct WeightedNeighbour)
-                     , _compare_weighted_neighbours );
+            int rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                        , cState, l, &nNeighb, 0x0 );
+            if(rc) return rc;
+            /* run on sorted */
             for(size_t i = 0; i < nNeighb; ++i) {
                 struct Cell * cCell = wneighb[i].cell;
+                assert(cCell);
                 _stack_push(&stack, cCell->to->data);
+                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                _gRootLayerNo = nLayer;
+                _gRootNHit = nHit;
+                _gRootNLink = nLink;
+                _gRootNMaxLinks = ptStart->refs.nUsed;
+                #endif
                 _eval_from_excessive(cCell, &stack, callback, userdata, minLength);
                 #ifdef NDEBUG
                 _stack_pull(&stack);
@@ -1050,6 +1082,61 @@ cats_visit_dfs_moderate( struct cats_Layers * ls
             #else
             assert(_stack_pull(&stack) == ptStart->data);
             #endif
+        }
+    }
+    free(stack.data);
+    return 0;
+}
+
+int
+cats_visit_dfs_moderate_w( struct cats_Layers * ls
+                         , unsigned int minLength
+                         , void (*callback)(const cats_HitData_t *, size_t, void *)
+                         , void * userdata
+                         ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* perform DF starting from the rightmost layer (shall contain highest
+     * states, omitting the leftmost one. For every layer collect cells for
+     * sorted left, omitting the visited ones */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+            /* For given layer, find highest link state to guarantee sorting
+             * within a certain state tier */
+            unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x1);
+            for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
+                size_t nNeighb = 0;
+                int rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                            , cState, l, &nNeighb, 0x0 );
+                if(rc) return rc;
+                /* run on sorted */
+                for(size_t i = 0; i < nNeighb; ++i) {
+                    struct Cell * cCell = wneighb[i].cell;
+                    assert(cCell);
+                    _stack_push(&stack, cCell->to->data);
+                    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                    _gRootLayerNo = nLayer;
+                    _gRootNHit = nHit;
+                    _gRootNLink = nLink;
+                    _gRootNMaxLinks = ptStart->refs.nUsed;
+                    #endif
+                    _eval_from(cCell, &stack, callback, userdata, minLength);
+                    #ifdef NDEBUG
+                    _stack_pull(&stack);
+                    #else
+                    assert(_stack_pull(&stack) == cCell->to->data);
+                    #endif
+                }
+            }
         }
     }
     free(stack.data);
@@ -1166,6 +1253,55 @@ cats_visit_dfs_strict( struct cats_Layers * ls
     return 0;
 }
 
+int
+cats_visit_dfs_strict_w( struct cats_Layers * ls
+                       , unsigned int minLength
+                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                       , void * userdata
+                       ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack
+                     , prevStack
+                     ;
+    stack.data =     (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    prevStack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = prevStack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* evaluate traversing */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        /* For given layer, find highest link state to guarantee sorting
+         * within a certain state tier */
+        unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x1);
+        for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
+            size_t nNeighb = 0;
+            int rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                        , cState, l, &nNeighb, 0x1 );
+            if(rc) return rc;
+            /* run on sorted */
+            for(size_t i = 0; i < nNeighb; ++i) {
+                struct Cell * cCell = wneighb[i].cell;
+                assert(cCell);
+                _stack_push(&stack, cCell->to->data);
+                _eval_from_strict(cCell, &stack, &prevStack, callback, userdata, minLength);
+                #ifdef NDEBUG
+                _stack_pull(&stack);
+                #else
+                assert(_stack_pull(&stack) == cCell->to->data);
+                #endif
+            }
+        }
+    }
+    free(stack.data);
+    free(prevStack.data);
+    return 0;
+}
+
 /*                          * * *   * * *   * * *                            */
 
 static void
@@ -1219,12 +1355,6 @@ commit:
             }
         }
     }
-    //if( stack->nTop >= minLength ) {
-    //    callback(stack->data, stack->nTop + 1, userdata);
-    //    #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-    //    _print_stack(stack->nTop + 1);
-    //    #endif
-    //}
 omit_subsequence:
     #ifdef NDEBUG
     _stack_pull(stack);
@@ -1260,12 +1390,6 @@ cats_visit_dfs_longest( struct cats_Layers * ls
                 if(cell->state < minLength) continue;
                 // use `doAdvance' flag to mark visited cells
                 if(cell->doAdvance) continue;  // omit "visited"
-                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
-                _gRootLayerNo = nLayer;
-                _gRootNHit = nHit;
-                _gRootNLink = nLink;
-                _gRootNMaxLinks = ptStart->refs.nUsed;
-                #endif
                 assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
                 _eval_from_l(cell, &stack, &prevStack, callback, userdata, nMissingLayers, minLength);
             }
@@ -1274,6 +1398,56 @@ cats_visit_dfs_longest( struct cats_Layers * ls
             #else
             assert(_stack_pull(&stack) == ptStart->data);
             #endif
+        }
+    }
+    free(stack.data);
+    free(prevStack.data);
+    return 0;
+}
+
+int
+cats_visit_dfs_longest_w( struct cats_Layers * ls
+                        , unsigned int minLength
+                        , unsigned int nMissingLayers
+                        , void (*callback)(const cats_HitData_t *, size_t, void *)
+                        , void * userdata
+                        ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack
+                     , prevStack
+                     ;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    prevStack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = prevStack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* evaluate traversing */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        /* For given layer, find highest link state to guarantee sorting
+         * within a certain state tier */
+        unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x1);
+        for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
+            size_t nNeighb = 0;
+            int rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                        , cState, l, &nNeighb, 0x1 );
+            if(rc) return rc;
+            /* run on sorted */
+            for(size_t i = 0; i < nNeighb; ++i) {
+                struct Cell * cCell = wneighb[i].cell;
+                assert(cCell);
+                _stack_push(&stack, cCell->to->data);
+                _eval_from_l(cCell, &stack, &prevStack, callback, userdata, nMissingLayers, minLength);
+                #ifdef NDEBUG
+                _stack_pull(&stack);
+                #else
+                assert(_stack_pull(&stack) == cCell->to->data);
+                #endif
+            }
         }
     }
     free(stack.data);
@@ -1392,6 +1566,79 @@ cats_visit_dfs_winning( struct cats_Layers * ls
             assert(_stack_pull(&stack) == ptStart->data);
             #endif
         }
+    }
+    free(stack.data);
+    return 0;
+}
+
+int
+cats_visit_dfs_winning_w( struct cats_Layers * ls
+                        , unsigned int minLength
+                        , unsigned int nMissingLayers
+                        , void (*callback)(const cats_HitData_t *, size_t, void *)
+                        , void * userdata
+                        ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* evaluate traversing */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        /* For given layer, find highest link state to guarantee sorting
+         * within a certain state tier */
+        unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x1);
+
+        for(unsigned int cState = maxStateOnThisLayer; cState >= minLength; --cState) {
+            size_t nNeighb = 0;
+            int rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                        , cState, l, &nNeighb, 0x1 );
+            if(rc) return rc;
+            /* run on sorted */
+            for(size_t i = 0; i < nNeighb; ++i) {
+                struct Cell * cCell = wneighb[i].cell;
+                assert(cCell);
+                _stack_push(&stack, cCell->to->data);
+                /*int won =*/ _eval_from_winning_l( cCell, &stack, callback
+                        , userdata, nMissingLayers, minLength);
+                #ifdef NDEBUG
+                _stack_pull(&stack);
+                #else
+                assert(_stack_pull(&stack) == cCell->to->data);
+                #endif
+            }
+        }
+        #if 0
+        for( size_t nHit = 0; nHit < l->nPointsUsed; ++nHit ) {
+            struct cats_Point * ptStart = l->points + nHit;
+            _stack_push(&stack, ptStart->data);
+            for( size_t nLink = 0; nLink < ptStart->refs.nUsed; ++nLink ) {
+                struct Cell * cell = ptStart->refs.cells[nLink];
+                if(cell->state < minLength) continue;
+                if(cell->doAdvance) continue;  // omit "visited"
+                #if defined(COLLECTION_DSTACK_DEBUG) && COLLECTION_DSTACK_DEBUG
+                _gRootLayerNo = nLayer;
+                _gRootNHit = nHit;
+                _gRootNLink = nLink;
+                _gRootNMaxLinks = ptStart->refs.nUsed;
+                #endif
+                assert(cell->leftNeighbours.nUsed); /* cell can not have state >1 without neghbours */
+                /*int won =*/ _eval_from_winning_l( cell, &stack, callback
+                        , userdata, nMissingLayers, minLength);
+            }
+            #ifdef NDEBUG
+            _stack_pull(&stack);
+            #else
+            assert(_stack_pull(&stack) == ptStart->data);
+            #endif
+        }
+        #endif
     }
     free(stack.data);
     return 0;

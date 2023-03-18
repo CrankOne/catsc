@@ -52,9 +52,9 @@ struct HardFilterWeighted : public CATSTrackFinder::iWeightedTripletFilter {
            , itBC = c.find(&b)
            ;
         if( itAB == b.end() || itBC == c.end() ) return 0;
-        std::cout << "  weighting a=" << a << ", b=" << b << ", c=" << c    // XXX
-                  << " => " << itAB->second * itBC->second                  // XXX
-                  << std::endl;                                             // XXX
+        //std::cout << "  weighting a=" << a << ", b=" << b << ", c=" << c    // XXX
+        //          << " => " << itAB->second * itBC->second                  // XXX
+        //          << std::endl;                                             // XXX
         return itAB->second * itBC->second;
     }
 };

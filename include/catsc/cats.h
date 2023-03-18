@@ -311,6 +311,11 @@ cats_visit_dfs_winning( struct cats_Layers * ls
  * __________________________________________ / Weighted collection strategies
  */
 
+/*
+ * Note, that weighted visiting strategies prefers closest hits over distant
+ * ones even if distant ones are better in terms of weight.
+ */
+
 int
 cats_visit_dfs_excessive_w( struct cats_Layers * ls
                           , unsigned int minLength
@@ -318,10 +323,35 @@ cats_visit_dfs_excessive_w( struct cats_Layers * ls
                           , void * userdata
                           );
 
-/*
- * Strict weighted visiting strategy preferring closest hits over distant ones
- * even if distant ones are better in terms of weight.
- */
+int
+cats_visit_dfs_moderate_w( struct cats_Layers * ls
+                         , unsigned int minLength
+                         , void (*callback)(const cats_HitData_t *, size_t, void *)
+                         , void * userdata
+                         );
+
+int
+cats_visit_dfs_strict_w( struct cats_Layers * ls
+                       , unsigned int minLength
+                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                       , void * userdata
+                       );
+
+int
+cats_visit_dfs_longest_w( struct cats_Layers * ls
+                        , unsigned int minLength
+                        , unsigned int nMissingLayers
+                        , void (*callback)(const cats_HitData_t *, size_t, void *)
+                        , void * userdata
+                        );
+
+int
+cats_visit_dfs_winning_w( struct cats_Layers * ls
+                        , unsigned int minLength
+                        , unsigned int nMissingLayers
+                        , void (*callback)(const cats_HitData_t *, size_t, void *)
+                        , void * userdata
+                        );
 
 #ifdef __cplusplus
 }  // extern "C"
