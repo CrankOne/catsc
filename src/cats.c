@@ -501,7 +501,7 @@ cats_connect( struct cats_Layers * ls
            ; toNLayer - fromNLayer <= nMissingLayers
            ; --fromNLayer ) {
             rc = 0;
-            assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
+            assert(cCell - a->pool <= nCellsNeed);  /* pool depleted */
             /* Create cells connecting this layer pair */
             cCell = _connect_layers( cCell
                                    , ls->layers + fromNLayer
