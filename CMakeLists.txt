@@ -10,7 +10,7 @@ set( catsc_VERSION ${catsc_VERSION_MAJOR}.${catsc_VERSION_MINOR} )
 
 #option(BUILD_STATIC_LIBS "Build the static library" ON)
 #option(BUILD_SHARED_LIBS "Build the shared library" ON)
-#option(BUILD_TESTS "Build test programs" OFF)
+option(BUILD_TESTS "Build test apps" OFF)
 
 set(CATS_COORDINATE_TYPE float CACHE STRING "C type used to describe spatial coordinates")
 set(CATS_HIT_ID_TYPE "unsigned int" CACHE STRING "C type used to identify hit on layer")
@@ -33,24 +33,25 @@ set_target_properties( ${catsc_LIB} PROPERTIES VERSION ${catsc_VERSION}
 
 #
 # Functional tests (require ROOT)
-find_package(ROOT COMPONENTS Core)
-if(ROOT_FOUND)
-    include( ${ROOT_USE_FILE} )
+if(BUILD_TESTS)
+    find_package(ROOT COMPONENTS Core)
+    if(ROOT_FOUND)
+        include( ${ROOT_USE_FILE} )
 
-    add_executable( catsc-test-randomc test/main-gpl.cc )
-    target_link_libraries( catsc-test-randomc ${catsc_LIB} ${ROOT_LIBRARIES} )
+        add_executable( catsc-test-randomc test/main-gpl.cc )
+        target_link_libraries( catsc-test-randomc ${catsc_LIB} ${ROOT_LIBRARIES} )
 
-    add_executable( catsc-test-randomcpp test/main-gpl-mult.cc )
-    target_link_libraries( catsc-test-randomcpp ${catsc_LIB} ${ROOT_LIBRARIES} )
+        add_executable( catsc-test-randomcpp test/main-gpl-mult.cc )
+        target_link_libraries( catsc-test-randomcpp ${catsc_LIB} ${ROOT_LIBRARIES} )
 
-    #separate_arguments(ROOT_CXX_FLAGS_ UNIX_COMMAND ${ROOT_CXX_FLAGS})
-    #list( REMOVE_ITEM ROOT_CXX_FLAGS_ -std=c++11 -std=c++14 )
-    #target_compile_options(catsc-test-mult PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${ROOT_CXX_FLAGS_}>)
-    #list(APPEND CMAKE_BUILD_RPATH "${ROOT_LIBRARY_DIR}")
-endif(ROOT_FOUND)
-
-add_executable( catsc-test test/main-test.cc )
-target_link_libraries( catsc-test ${catsc_LIB} )
+        #separate_arguments(ROOT_CXX_FLAGS_ UNIX_COMMAND ${ROOT_CXX_FLAGS})
+        #list( REMOVE_ITEM ROOT_CXX_FLAGS_ -std=c++11 -std=c++14 )
+        #target_compile_options(catsc-test-mult PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${ROOT_CXX_FLAGS_}>)
+        #list(APPEND CMAKE_BUILD_RPATH "${ROOT_LIBRARY_DIR}")
+    endif(ROOT_FOUND)
+    add_executable( catsc-test test/main-test.cc )
+    target_link_libraries( catsc-test ${catsc_LIB} )
+endif(BUILD_TESTS)
 
 install( TARGETS ${catsc_LIB}
          EXPORT catscTargets
