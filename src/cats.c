@@ -387,6 +387,7 @@ _allocate_fully_connected_cells( struct cats_Layers * ls
                                ) {
     /* Estimated number of cells needed */
     size_t nCellsNeed = 0;
+    #if 0  /* xxx: somehow, producing wrong number sometimes */
     for( cats_LayerNo_t fromNLayer = 0
        ; fromNLayer < ls->nLayers - 1
        ; ++fromNLayer ) {
@@ -398,6 +399,25 @@ _allocate_fully_connected_cells( struct cats_Layers * ls
                         ;
         }
     }
+    #else
+    assert(ls);
+    assert(ls->layers);
+    assert(ls->nLayers > 2);
+    for( cats_LayerNo_t toNLayer = 1
+       ; toNLayer < ls->nLayers
+       ; ++toNLayer ) {
+        for( cats_LayerNo_t fromNLayer = toNLayer - 1
+           ; toNLayer - fromNLayer <= nMissingLayers
+           ; --fromNLayer ) {
+            assert(toNLayer   < ls->nLayers);
+            assert(fromNLayer < ls->nLayers);
+            nCellsNeed += ls->layers[fromNLayer].nPointsUsed
+                        * ls->layers[toNLayer  ].nPointsUsed
+                        ;
+            if(0 == fromNLayer) break;
+        }
+    }
+    #endif
     if(0 == nCellsNeed)
         return CATSC_RC_EMPTY_GRAPH;
     *nCellsNeed_ = nCellsNeed;
@@ -570,6 +590,7 @@ _connect_layers_w( struct Cell * cCell
         struct cats_Point * toHit = toLayer->points + toNHit;
         for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
             struct cats_Point * fromHit = fromLayer->points + fromNHit;
+            if( 0 == toLayer->nPointsUsed || 0 == fromLayer->nPointsUsed ) continue;
             /* init current cell */
             cCell->from = fromHit;
             cCell->to = toHit;
@@ -678,10 +699,10 @@ cats_connect_w( struct cats_Layers * ls
        ; toNLayer < ls->nLayers
        ; ++toNLayer ) {
         for( cats_LayerNo_t fromNLayer = toNLayer - 1
-           ; toNLayer - fromNLayer <= nMissingLayers
+           ; fromNLayer >= 0 && toNLayer - fromNLayer <= nMissingLayers
            ; --fromNLayer ) {
             rc = 0;
-            assert(cCell - a->pool < nCellsNeed);  /* pool depleted */
+            assert(cCell - a->pool <= nCellsNeed); /* pool depleted; eq means 0 lyr */
             /* Create cells connecting this layer pair */
             cCell = _connect_layers_w( cCell
                                      , ls->layers + fromNLayer
