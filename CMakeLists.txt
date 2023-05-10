@@ -22,6 +22,7 @@ set( catsc_SOURCES src/cats.c
                    src/cats.cc )
 
 add_library(${catsc_LIB} SHARED ${catsc_SOURCES})
+target_compile_features(${catsc_LIB} PUBLIC c_std_99)  # TODO: isn't it better to rewrite C part for -ansi?
 target_include_directories(${catsc_LIB} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include> )
