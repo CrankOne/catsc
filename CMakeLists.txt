@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.9.4)
 
 #
 # Main library
@@ -23,6 +23,7 @@ set( catsc_SOURCES src/cats.c
 
 add_library(${catsc_LIB} SHARED ${catsc_SOURCES})
 target_compile_features(${catsc_LIB} PUBLIC c_std_99)  # TODO: isn't it better to rewrite C part for -ansi?
+target_compile_features(${catsc_LIB} PUBLIC cxx_std_14)
 target_include_directories(${catsc_LIB} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include> )
