@@ -496,11 +496,70 @@ _connect_layers( struct Cell * cCell
     return cCell;
 }
 
+/* Modifies cells and layer references in a way to reflect the connections
+ *
+ * - toLayerCellRefs is used as destination collection of to-layer cells refs
+ * - "current cell" pointer is used to allocate (borrow) new cells
+ * - from/to layers are provided to retrieve collections of hits
+ * - test_triplet+userdata are for triplet filtering
+ * - test_doublet+userdata are for doublet filtering
+ * */
+static struct Cell *
+_connect_layers_dblf( struct Cell * cCell
+                    , struct Layer * fromLayer
+                    , struct Layer * toLayer
+                    , cats_Filter_t test_triplet, void * userData
+                    , cats_DoubletFilter_t test_doublet, void * doubletUserdata
+                    , int * catscErrNo
+                    ) {
+    assert(cCell);
+    assert(catscErrNo);
+    int rc;
+    /* build the cells as cartesian product */
+    for(size_t toNHit = 0; toNHit < toLayer->nPointsUsed; ++toNHit) {
+        struct cats_Point * toHit = toLayer->points + toNHit;
+        for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
+            struct cats_Point * fromHit = fromLayer->points + fromNHit;
+            rc = test_doublet(fromHit->data, toHit->data, doubletUserdata);
+            if(0 == rc) continue;  /* doublet filter discarded this pair */
+            cCell->from = fromHit;
+            cCell->to = toHit;
+            cCell->state = 1;
+            cCell->doAdvance = 0;
+            /* Cells (doublets) in left ("from") layer are created since we
+             * iterate from left to right; append the neghbours list. If
+             * `fromLayerCellRefs` is null we are probably on the leftmost
+             * layer */
+            for( size_t i = 0; i < fromHit->refs.nUsed; ++i ) {
+                struct Cell * leftCellPtr = fromHit->refs.cells[i];
+                assert( leftCellPtr );
+                assert( leftCellPtr->to == fromHit );
+                /* Check triplet and create cells if test passed */
+                if(test_triplet( leftCellPtr->from->data
+                               , fromHit->data
+                               , toHit->data
+                               , userData
+                               )) {
+                    if(!!(*catscErrNo = _cell_refs_add(&cCell->leftNeighbours, fromHit->refs.cells[i]))) {
+                        return NULL;  /* allocation failure */
+                    }
+                }
+            }
+            /* Unconditionally append to-hit refs */
+            if(!!(*catscErrNo = _cell_refs_add(&toHit->refs, cCell))) {
+                return NULL;  /* allocation failure */
+            }
+            ++cCell;
+        }
+    }
+    return cCell;
+}
+
 int
 cats_connect( struct cats_Layers * ls
             , struct cats_CellsPool * a
-            , cats_Filter_t test_triplet
-            , void * userData
+            , cats_Filter_t test_triplet, void * tripletUserData
+            , cats_DoubletFilter_t test_doublet, void * doubletUserdata
             , cats_LayerNo_t nMissingLayers
             ) {
     assert(ls);
@@ -522,14 +581,24 @@ cats_connect( struct cats_Layers * ls
            ; --fromNLayer ) {
             rc = 0;
             assert(cCell - a->pool <= nCellsNeed);  /* pool depleted */
-            /* Create cells connecting this layer pair */
-            cCell = _connect_layers( cCell
-                                   , ls->layers + fromNLayer
-                                   , ls->layers + toNLayer
-                                   , test_triplet
-                                   , userData
-                                   , &rc
-                                   );
+            if(NULL == test_doublet) {
+                /* Create cells connecting this layer pair */
+                cCell = _connect_layers( cCell
+                                       , ls->layers + fromNLayer
+                                       , ls->layers + toNLayer
+                                       , test_triplet, tripletUserData
+                                       , &rc
+                                       );
+            } else {
+                /* Create cells connecting this layer pair */
+                cCell = _connect_layers_dblf( cCell
+                                       , ls->layers + fromNLayer
+                                       , ls->layers + toNLayer
+                                       , test_triplet, tripletUserData
+                                       , test_doublet, doubletUserdata
+                                       , &rc
+                                       );
+            }
             if(NULL == cCell) {
                 assert(rc);  /* _connect_layers() did not return error code */
                 return rc;
@@ -569,8 +638,8 @@ static struct Cell *
 _connect_layers_w( struct Cell * cCell
                  , struct Layer * fromLayer
                  , struct Layer * toLayer
-                 , cats_WeightedFilter_t test_triplet_w
-                 , void * userData
+                 , cats_WeightedFilter_t test_triplet_w, void * tripletUserData
+                 , cats_DoubletFilter_t test_doublet, void * doubletUserdata
                  , struct WeightedNeighbour ** weightBufferPtr
                  , size_t * weightBufferSizePtr
                  , int * catscErrNo
@@ -586,11 +655,16 @@ _connect_layers_w( struct Cell * cCell
      *   |  `------- "from hit" on "from layer"
      *   `---------- "left neghbours" of "current cell"
      * */
+    int rc;
     for(size_t toNHit = 0; toNHit < toLayer->nPointsUsed; ++toNHit) {
         struct cats_Point * toHit = toLayer->points + toNHit;
         for(size_t fromNHit = 0; fromNHit < fromLayer->nPointsUsed; ++fromNHit) {
             struct cats_Point * fromHit = fromLayer->points + fromNHit;
             if( 0 == toLayer->nPointsUsed || 0 == fromLayer->nPointsUsed ) continue;
+            if(test_doublet) {
+                rc = test_doublet(fromHit->data, toHit->data, doubletUserdata);
+                if(0 == rc) continue;  /* doublet filter discarded this pair */
+            }
             /* init current cell */
             cCell->from = fromHit;
             cCell->to = toHit;
@@ -613,7 +687,7 @@ _connect_layers_w( struct Cell * cCell
                 cats_Weight_t w = test_triplet_w( leftCellPtr->from->data
                                                 , fromHit->data
                                                 , toHit->data
-                                                , userData
+                                                , tripletUserData
                                                 );
                 if(w <= 0) continue;  /* no connection for negative weight */
                 /* append weights array */
@@ -680,8 +754,8 @@ _connect_layers_w( struct Cell * cCell
 int
 cats_connect_w( struct cats_Layers * ls
               , struct cats_CellsPool * a
-              , cats_WeightedFilter_t test_triplet
-              , void * userData
+              , cats_WeightedFilter_t test_triplet, void * tripletUserData
+              , cats_DoubletFilter_t test_doublet, void * doubletUserData
               , cats_LayerNo_t nMissingLayers
               ) {
     assert(ls);
@@ -707,8 +781,8 @@ cats_connect_w( struct cats_Layers * ls
             cCell = _connect_layers_w( cCell
                                      , ls->layers + fromNLayer
                                      , ls->layers + toNLayer
-                                     , test_triplet
-                                     , userData
+                                     , test_triplet, tripletUserData
+                                     , test_doublet, doubletUserData
                                      , &weightBuffer
                                      , &weightBufferNItems
                                      , &rc

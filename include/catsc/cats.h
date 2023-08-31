@@ -32,7 +32,7 @@ extern "C" {
 /** Type of hit data payload */
 typedef CATS_HIT_DATA_TYPE cats_HitData_t;
 
-/**\brief Filter callback type
+/**\brief Triplet filter callback type
  *
  * This callback shall return non-zero code if given hits triplet can be a
  * valid track piece */
@@ -40,6 +40,14 @@ typedef int (*cats_Filter_t)( cats_HitData_t
                             , cats_HitData_t
                             , cats_HitData_t
                             , void * );
+
+/**\brief Triplet filter callback type
+ *
+ * This callback shall return non-zero code if given hits triplet can be a
+ * valid track piece */
+typedef int (*cats_DoubletFilter_t)( cats_HitData_t
+                                   , cats_HitData_t
+                                   , void * );
 
 typedef CATS_WEIGHT_DATA_TYPE cats_Weight_t;
 
@@ -142,8 +150,8 @@ void cats_cells_pool_reset( struct cats_Layers *
  * */
 int cats_connect( struct cats_Layers * ls
                 , struct cats_CellsPool * a
-                , cats_Filter_t test_triplet
-                , void * userData
+                , cats_Filter_t test_triplet, void * tripletUserData
+                , cats_DoubletFilter_t test_doublet, void * doubletUserdata
                 , cats_LayerNo_t nMissingLayers
                 );
 
@@ -162,8 +170,8 @@ int cats_connect( struct cats_Layers * ls
 int
 cats_connect_w( struct cats_Layers * ls
               , struct cats_CellsPool * a
-              , cats_WeightedFilter_t test_triplet
-              , void * userData
+              , cats_WeightedFilter_t test_triplet, void * tripletUserData
+              , cats_DoubletFilter_t test_doublet, void * doubletUserdata
               , cats_LayerNo_t nMissingLayers
               );
 

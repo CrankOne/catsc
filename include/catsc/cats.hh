@@ -88,6 +88,17 @@ class TrackFinder : protected HitDataTraits<HitDataT>::CacheType
                   , public BaseTrackFinder
                   {
 public:
+    /// Base class for hit doublet filtering functor
+    struct iDoubletFilter {
+        iDoubletFilter() {}
+        /// Should return whether triplet is possibly describes a segment of
+        /// a track based on IDs and coordinates of three points. Lifetime of
+        /// the provided ptrs is valid until `reset()` call.
+        virtual bool matches( typename HitDataTraits<HitDataT>::HitInfo_t
+                            , typename HitDataTraits<HitDataT>::HitInfo_t
+                            ) const = 0;
+    };  // iDoubletFilter
+
     struct iTripletFilterBase {
         const bool weighted;
         iTripletFilterBase(bool isWeighted) : weighted(isWeighted) {}
@@ -123,6 +134,12 @@ private:
     /// Soft limits for allocations
     size_t _softLimitCells, _softLimitHits, _softLimitRefs;
 
+    /// C callback implem applying doublet filter
+    static int c_f_wrapper_dblt_filter( cats_HitData_t c1
+                                      , cats_HitData_t c2
+                                      , void * filter_
+                                      );
+
     /// C callback implem applying the filter
     static int c_f_wrapper_filter( cats_HitData_t c1
                                  , cats_HitData_t c2
@@ -156,7 +173,10 @@ protected:
     /// Connects the layers and evaluates the automaton.
     ///
     /// \throw `std::bad_alloc` on memory error
-    bool _evaluate(iTripletFilterBase & filter_, cats_LayerNo_t nMissingLayers) {
+    bool _evaluate( iTripletFilterBase & filter_
+                  , cats_LayerNo_t nMissingLayers
+                  , iDoubletFilter * doubletFilterPtr
+                  ) {
         if( _debugJSONStream ) fputs("},\"its\":[", _debugJSONStream);
 
         if(!filter_.weighted) {
@@ -164,8 +184,10 @@ protected:
             _isWeightedGraph = false;
             _rc = cats_connect( _layers
                               , _cells
-                              , TrackFinder<HitDataT>::c_f_wrapper_filter
-                              , &filter
+                              , TrackFinder<HitDataT>::c_f_wrapper_filter, &filter
+                              , doubletFilterPtr ? TrackFinder<HitDataT>::c_f_wrapper_dblt_filter
+                                                 : NULL
+                                                 , doubletFilterPtr
                               , nMissingLayers
                               );
         } else {
@@ -173,8 +195,10 @@ protected:
             _isWeightedGraph = true;
             _rc = cats_connect_w( _layers
                                 , _cells
-                                , TrackFinder<HitDataT>::c_f_wrapper_wfilter
-                                , &filter
+                                , TrackFinder<HitDataT>::c_f_wrapper_wfilter, &filter
+                                , doubletFilterPtr ? TrackFinder<HitDataT>::c_f_wrapper_dblt_filter
+                                                   : NULL
+                                                   , doubletFilterPtr
                                 , nMissingLayers
                                 );
         }
@@ -275,7 +299,9 @@ public:
 
     /// Evaluates automaton; prepares connection graph for tracks collection
     bool evaluate( iTripletFilterBase & filter
-                 , cats_LayerNo_t nMissingLayers ) {
+                 , cats_LayerNo_t nMissingLayers
+                 , iDoubletFilter * doubletFilterPtr=NULL
+                 ) {
         if(_evaluated) {
             cats_cells_pool_reset( _layers
                                  , _cells
@@ -284,7 +310,7 @@ public:
             _evaluated = false;
         }
         _lastNMissing = nMissingLayers;
-        return _evaluate(filter, _lastNMissing);
+        return _evaluate(filter, _lastNMissing, doubletFilterPtr);
     }
 
     ///\brief Collects all track candidates permitted by the filter, including
@@ -412,6 +438,17 @@ public:
         cats_cells_pool_reset(_layers, _cells, _softLimitCells);
     }
 };
+
+template<typename HitDataT> int
+TrackFinder<HitDataT>::c_f_wrapper_dblt_filter( cats_HitData_t c1
+                                      , cats_HitData_t c2
+                                      , void * filter_
+                                      ) {
+    return reinterpret_cast<typename TrackFinder<HitDataT>::iDoubletFilter *>(filter_)
+        ->matches( *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c1)
+                 , *reinterpret_cast<typename HitDataTraits<HitDataT>::HitInfoPtr_t>(c2)
+                 ) ? 1 : 0;
+}
 
 template<typename HitDataT> int
 TrackFinder<HitDataT>::c_f_wrapper_filter( cats_HitData_t c1
