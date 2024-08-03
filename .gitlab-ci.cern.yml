@@ -77,6 +77,7 @@ variables:
       }
       module-whatis "CATSc, v$(cat version.txt) for $BUILD_ENVIRONMENT"
       set prefix $PKG_PREFIX
+      setenv              catsc_DIR           \$prefix
       prepend-path        PATH                \$prefix/bin
       prepend-path        PKG_CONFIG_PATH     \$prefix/lib/pkgconfig
       # vim: set filetype=tcl : 
@@ -96,7 +97,7 @@ variables:
     paths:
       - build/*.cpack.tar.gz
     reports:
-      dotenv: version.env
+      dotenv: dotenv.env
 
 # deploy stage template
 # (relies on lpkgm on cvmfs share, see https://gitlab.cern.ch/na64-packaging/lpkgm )
@@ -107,32 +108,45 @@ variables:
     - $HOME/lpkgm/lpkgm-na64.sh -Dplatform=${PLATFORM} install ${CI_PROJECT_NAME} "${PACKAGE_VERSION}"
 
 
-# LCG 105, debug
+#
+# Stages
 
+# LCG 105, debug
 LCG_105/x86_64-el9-gcc13-dbg-build:
   <<: *lcg-build-stage
 
-# TODO: won't it be better to deploy all at once?
-#LCG_105/x86_64-el9-gcc13-dbg-deploy:
-#  <<: *lcg-deploy-stage
-#  needs: [LCG_105/x86_64-el9-gcc13-dbg-build]
+LCG_105/x86_64-el9-gcc13-dbg-deploy:
+  <<: *lcg-deploy-stage
+  needs: [LCG_105/x86_64-el9-gcc13-dbg-build]
 
 
+# LCG 105, optimized
 LCG_105/x86_64-el9-gcc13-opt-build:
   <<: *lcg-build-stage
 
-# EL9 native, debug
+LCG_105/x86_64-el9-gcc13-opt-deploy:
+  <<: *lcg-deploy-stage
+  needs: [LCG_105/x86_64-el9-gcc13-opt-build]
 
+
+# EL9 native, debug
 x86_64-el9-gcc11-dbg-build:
   <<: *lcg-build-stage
   image: gitlab-registry.cern.ch/p348/na64sw/na64sw-ci-native-alma9
 
-# EL9 native, optimized
+x86_64-el9-gcc11-dbg-deploy:
+  <<: *lcg-deploy-stage
+  needs: [x86_64-el9-gcc11-dbg-build]
 
+
+# EL9 native, optimized
 x86_64-el9-gcc11-opt-build:
   <<: *lcg-build-stage
   image: gitlab-registry.cern.ch/p348/na64sw/na64sw-ci-native-alma9
 
+x86_64-el9-gcc11-opt-deploy:
+  <<: *lcg-deploy-stage
+  needs: [x86_64-el9-gcc11-opt-build]
+
 ...
 # vim: set tabstop=2 :
-
