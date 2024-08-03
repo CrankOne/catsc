@@ -46,6 +46,7 @@ variables:
     GIT_STRATEGY: clone
   script:
     - *configure-environment
+    - source /cvmfs/na64.cern.ch/sft/${PLATFORM}/this-env.sh
     - 'export CMAKE_BUILD_TYPE=$([[ $BUILD_CFG_SUFFIX = dbg ]] && echo "Debug" || echo "Release")'
     - 'echo "Stage \"${CI_JOB_STAGE}\" is considered as ${BUILD_CFG_SUFFIX} build in ${BUILD_ENVIRONMENT} environment."'
     - 'echo "CMake build type in use: $CMAKE_BUILD_TYPE"'
