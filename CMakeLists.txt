@@ -82,3 +82,12 @@ include(cmake/catscCreateConfig.cmake)
 add_custom_target(uninstall
     "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uninstall.cmake"
 )
+
+# CPack aux (packaging)
+include(InstallRequiredSystemLibraries)
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_VERSION_MAJOR "${catsc_VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${catsc_VERSION_MINOR}")
+set(CPACK_SOURCE_GENERATOR "TBZ2")
+include(CPack)
+
