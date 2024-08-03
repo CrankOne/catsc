@@ -51,7 +51,6 @@ variables:
     - 'echo "CMake build type in use: $CMAKE_BUILD_TYPE"'
     - git fetch --tags
     # assure we have tags for proper versioning
-    - mkdir build
     - cd build
     # obtain source code version (not package version!) via git describe
     - git describe --match "v[0-9]*.[0-9]*" --tags | tee version.txt
@@ -113,9 +112,9 @@ LCG_105/x86_64-el9-gcc13-dbg-build:
   <<: *lcg-build-stage
 
 # TODO: won't it be better to deploy all at once?
-LCG_105/x86_64-el9-gcc13-dbg-deploy:
-  <<: *lcg-deploy-stage
-  needs: [LCG_105/x86_64-el9-gcc13-dbg-build]
+#LCG_105/x86_64-el9-gcc13-dbg-deploy:
+#  <<: *lcg-deploy-stage
+#  needs: [LCG_105/x86_64-el9-gcc13-dbg-build]
 
 
 LCG_105/x86_64-el9-gcc13-opt-build:
@@ -127,7 +126,7 @@ x86_64-el9-gcc11-dbg-build:
   <<: *lcg-build-stage
   image: gitlab-registry.cern.ch/p348/na64sw/na64sw-ci-native-alma9
 
-# EL9 native, debug
+# EL9 native, optimized
 
 x86_64-el9-gcc11-opt-build:
   <<: *lcg-build-stage
