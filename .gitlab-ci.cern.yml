@@ -77,7 +77,7 @@ variables:
       }
       module-whatis "CATSc, v$(cat version.txt) for $BUILD_ENVIRONMENT"
       set prefix $PKG_PREFIX
-      setenv              catsc_DIR           \$prefix
+      setenv              catsc_PREFIX        \$prefix
       prepend-path        PATH                \$prefix/bin
       prepend-path        PKG_CONFIG_PATH     \$prefix/lib/pkgconfig
       # vim: set filetype=tcl : 
