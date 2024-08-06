@@ -58,7 +58,7 @@ variables:
     # package version string (differs from source with build conf suffix)
     - export PACKAGE_VERSION=$(cat version.txt)-$BUILD_CFG_SUFFIX
     # prefix (where package will be installed)
-    - export PKG_PREFIX=/cvmfs/na64.cern.ch/sft/$BUILD_ENVIRONMENT/${CI_PROJECT_NAME}/$PACKAGE_VERSION
+    - export PKG_PREFIX=/cvmfs/na64.cern.ch/sft/$PLATFORM/${CI_PROJECT_NAME}/$PACKAGE_VERSION
     # configure build, with verbose logging of configure stage
     # * CPack generator set to gzipped archive
     # * Vendor set to denote CI-based build (to differ from manual deployments)
