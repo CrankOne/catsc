@@ -62,12 +62,15 @@ variables:
     # configure build, with verbose logging of configure stage
     # * CPack generator set to gzipped archive
     # * Vendor set to denote CI-based build (to differ from manual deployments)
+    # * libdir is forced to `lib/` (instead of lib64 that might be used by
+    #   CMake sometimes)
     - >
         cmake .. -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
           --log-level=DEBUG \
           -DCPACK_GENERATOR=TGZ \
           -DCPACK_PACKAGE_VENDOR="NA64 Collaboration (CERN), GitLab CI" \
-          -DCMAKE_INSTALL_PREFIX=$PKG_PREFIX
+          -DCMAKE_INSTALL_PREFIX=$PKG_PREFIX \
+          -DCMAKE_INSTALL_LIBDIR=lib
     # create linux environment module file to be used on share
     - |
       cat > modulefile <<EOF
@@ -75,7 +78,7 @@ variables:
       proc ModulesHelp { } {
          puts stderr "[module-info name]: CATSc, v$(cat version.txt) for ${CI_PROJECT_NAME}, v$PACKAGE_VERSION for $BUILD_ENVIRONMENT"
       }
-      module-whatis "CATSc, v$(cat version.txt) for $BUILD_ENVIRONMENT"
+      module-whatis "CATSc, $(cat version.txt) for $BUILD_ENVIRONMENT"
       set prefix $PKG_PREFIX
       setenv              catsc_PREFIX        \$prefix
       prepend-path        PATH                \$prefix/bin
