@@ -533,7 +533,8 @@ _usage_info( std::ostream & os
           " not needed)." << std::endl
        << "COMMON_OPTS are:" << std::endl
        << "  -m <method>, required option, defines collection method. Must"
-          " be one of: \"exessive\", \"strict\", \"weighted-strict\","
+          " be one of: \"exessive\", \"strict\", \"strict-deprecated\","
+          " \"weighted-strict\","
           " \"longest\", \"weighted-longest\"."
        << std::endl
        << "  -l <min-length=" << cfg.nMinLength << "> restriction on minimal"
@@ -807,6 +808,8 @@ main(int argc, char * argv[]) {
             cats.collect(collector, thisLength);
         } else if( thisMethod == "strict" ) {
             cats.collect_strict(collector, thisLength);
+        } else if( thisMethod == "strict-deprecated" ) {
+            cats.collect_strict_deprecated(collector, thisLength);
         } else if(thisMethod == "longest") {
             cats.collect_longest(collector, thisLength);
         } else if(thisMethod == "winning") {

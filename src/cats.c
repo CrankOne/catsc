@@ -1317,12 +1317,16 @@ omit_subsequence:
     #endif
 }
 
+/* Deprecated: compares every candidate only with the last emitted one, so
+ * sub-sequences of an earlier candidate leak through once any other
+ * candidate is emitted in between. Kept for compatibility, see
+ * `cats_visit_dfs_strict()` */
 int
-cats_visit_dfs_strict( struct cats_Layers * ls
-                     , unsigned int minLength
-                     , void (*callback)(const cats_HitData_t *, size_t, void *)
-                     , void * userdata
-                     ) {
+cats_visit_dfs_strict_deprecated( struct cats_Layers * ls
+                                , unsigned int minLength
+                                , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                , void * userdata
+                                ) {
     if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
@@ -1364,12 +1368,13 @@ cats_visit_dfs_strict( struct cats_Layers * ls
     return 0;
 }
 
+/* Deprecated, see `cats_visit_dfs_strict_deprecated()` */
 int
-cats_visit_dfs_strict_w( struct cats_Layers * ls
-                       , unsigned int minLength
-                       , void (*callback)(const cats_HitData_t *, size_t, void *)
-                       , void * userdata
-                       ) {
+cats_visit_dfs_strict_deprecated_w( struct cats_Layers * ls
+                                  , unsigned int minLength
+                                  , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                  , void * userdata
+                                  ) {
     if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
     --minLength;
     /* initialize traversing stack */
@@ -1412,6 +1417,214 @@ cats_visit_dfs_strict_w( struct cats_Layers * ls
     free(stack.data);
     free(prevStack.data);
     return 0;
+}
+
+/* Buffer of track candidates, used by strict strategy to decide on
+ * sub-sequences before invoking user callback. Hits of all candidates are
+ * kept contiguously; N-th candidate occupies
+ * `hits[offsets[N]] ... hits[offsets[N+1] - 1]`.
+ * */
+struct CandidatesBuffer {
+    cats_HitData_t * hits;
+    size_t nHitsUsed
+         , nHitsAllocated;
+    size_t * offsets;
+    size_t nCandidates
+         , nOffsetsAllocated;
+    int errNo;
+};
+
+static void
+_candidates_buffer_init( struct CandidatesBuffer * buf ) {
+    buf->hits = NULL;
+    buf->nHitsUsed = buf->nHitsAllocated = 0;
+    buf->offsets = NULL;
+    buf->nCandidates = buf->nOffsetsAllocated = 0;
+    buf->errNo = 0;
+}
+
+static void
+_candidates_buffer_free( struct CandidatesBuffer * buf ) {
+    free(buf->hits);
+    free(buf->offsets);
+    _candidates_buffer_init(buf);
+}
+
+/* Has signature of collection callback to be used with DFS routines; copies
+ * given candidate into buffer. Sets `errNo` on allocation failure. */
+static void
+_candidates_buffer_append( const cats_HitData_t * hits
+                         , size_t nHits
+                         , void * buf_ ) {
+    struct CandidatesBuffer * buf = (struct CandidatesBuffer *) buf_;
+    if(buf->errNo) return;
+    /* assure offsets array can keep this candidate's start and end */
+    if(buf->nCandidates + 2 > buf->nOffsetsAllocated) {
+        size_t nNew = buf->nOffsetsAllocated + CATS_BACKREF_REALLOC_STRIDE;
+        size_t * newOffsets = (size_t *) realloc(buf->offsets, nNew*sizeof(size_t));
+        if(!newOffsets) { buf->errNo = CATSC_ERROR_ALLOC_FAILURE_CANDIDATES; return; }
+        buf->offsets = newOffsets;
+        buf->nOffsetsAllocated = nNew;
+    }
+    if(buf->nHitsUsed + nHits > buf->nHitsAllocated) {
+        size_t nNew = buf->nHitsAllocated + nHits + CATS_BACKREF_REALLOC_STRIDE;
+        cats_HitData_t * newHits
+            = (cats_HitData_t *) realloc(buf->hits, nNew*sizeof(cats_HitData_t));
+        if(!newHits) { buf->errNo = CATSC_ERROR_ALLOC_FAILURE_CANDIDATES; return; }
+        buf->hits = newHits;
+        buf->nHitsAllocated = nNew;
+    }
+    if(0 == buf->nCandidates) buf->offsets[0] = 0;
+    memcpy(buf->hits + buf->nHitsUsed, hits, nHits*sizeof(cats_HitData_t));
+    buf->nHitsUsed += nHits;
+    buf->offsets[++(buf->nCandidates)] = buf->nHitsUsed;
+}
+
+struct CandidateOrder {
+    size_t nCandidate
+         , length;
+};
+
+/* Orders candidates by length, descending; keeps DFS order for candidates
+ * of same length */
+static int
+_compare_candidates_order(const void * a_, const void * b_) {
+    const struct CandidateOrder * a = (const struct CandidateOrder *) a_
+                              , * b = (const struct CandidateOrder *) b_;
+    if(a->length != b->length) return a->length > b->length ? -1 : 1;
+    if(a->nCandidate != b->nCandidate) return a->nCandidate < b->nCandidate ? -1 : 1;
+    return 0;
+}
+
+/* Returns non-zero if every hit of candidate `nA` is found in candidate `nB` */
+static int
+_candidate_is_subset( const struct CandidatesBuffer * buf
+                    , size_t nA, size_t nB ) {
+    for( size_t i = buf->offsets[nA]; i < buf->offsets[nA + 1]; ++i ) {
+        int found = 0;
+        for( size_t j = buf->offsets[nB]; j < buf->offsets[nB + 1]; ++j ) {
+            if(buf->hits[i] != buf->hits[j]) continue;
+            found = 1;
+            break;
+        }
+        if(!found) return 0;
+    }
+    return 1;
+}
+
+/* Emits buffered candidates that are not sub-sequences of any other
+ * emitted candidate. Candidates are considered longest first so that every
+ * candidate is compared against all the (longer) ones kept before it;
+ * emission then follows original DFS order. */
+static int
+_candidates_buffer_emit_strict( struct CandidatesBuffer * buf
+                              , void (*callback)(const cats_HitData_t *, size_t, void *)
+                              , void * userdata
+                              ) {
+    if(buf->errNo) return buf->errNo;
+    if(0 == buf->nCandidates) return 0;
+    const size_t nCandidates = buf->nCandidates;
+    struct CandidateOrder * order
+        = (struct CandidateOrder *) malloc(nCandidates*sizeof(struct CandidateOrder));
+    size_t * kept = (size_t *) malloc(nCandidates*sizeof(size_t));
+    unsigned char * isKept = (unsigned char *) calloc(nCandidates, 1);
+    if(!(order && kept && isKept)) {
+        free(order); free(kept); free(isKept);
+        return CATSC_ERROR_ALLOC_FAILURE_CANDIDATES;
+    }
+    for(size_t n = 0; n < nCandidates; ++n) {
+        order[n].nCandidate = n;
+        order[n].length = buf->offsets[n + 1] - buf->offsets[n];
+    }
+    qsort(order, nCandidates, sizeof(struct CandidateOrder), _compare_candidates_order);
+    size_t nKept = 0;
+    for(size_t i = 0; i < nCandidates; ++i) {
+        const size_t nCandidate = order[i].nCandidate;
+        int isSubset = 0;
+        for(size_t k = 0; k < nKept && !isSubset; ++k) {
+            isSubset = _candidate_is_subset(buf, nCandidate, kept[k]);
+        }
+        if(isSubset) continue;
+        kept[nKept++] = nCandidate;
+        isKept[nCandidate] = 1;
+    }
+    for(size_t n = 0; n < nCandidates; ++n) {
+        if(!isKept[n]) continue;
+        callback( buf->hits + buf->offsets[n]
+                , buf->offsets[n + 1] - buf->offsets[n]
+                , userdata );
+    }
+    free(order);
+    free(kept);
+    free(isKept);
+    return 0;
+}
+
+int
+cats_visit_dfs_strict( struct cats_Layers * ls
+                     , unsigned int minLength
+                     , void (*callback)(const cats_HitData_t *, size_t, void *)
+                     , void * userdata
+                     ) {
+    /* Traversal is the same as for moderate strategy (visited cells are not
+     * considered as roots); sub-sequences are filtered out afterwards */
+    struct CandidatesBuffer buf;
+    _candidates_buffer_init(&buf);
+    int rc = cats_visit_dfs_moderate(ls, minLength, _candidates_buffer_append, &buf);
+    if(!rc) rc = _candidates_buffer_emit_strict(&buf, callback, userdata);
+    _candidates_buffer_free(&buf);
+    return rc;
+}
+
+int
+cats_visit_dfs_strict_w( struct cats_Layers * ls
+                       , unsigned int minLength
+                       , void (*callback)(const cats_HitData_t *, size_t, void *)
+                       , void * userdata
+                       ) {
+    if(minLength < 3) return CATSC_RC_BAD_MIN_LENGTH;
+    --minLength;
+    int rc = 0;
+    struct CandidatesBuffer buf;
+    _candidates_buffer_init(&buf);
+    /* initialize traversing stack */
+    struct PointsStack stack;
+    stack.data = (const void **) malloc(ls->nLayers*sizeof(cats_HitData_t));
+    stack.nTop = -1;
+
+    size_t nNeighbAllocated = CATS_BACKREF_REALLOC_STRIDE;
+    struct WeightedNeighbour * wneighb
+        = (struct WeightedNeighbour *) malloc(sizeof(struct WeightedNeighbour)*nNeighbAllocated);
+    /* evaluate traversing, same order as for deprecated strict strategy */
+    for( cats_LayerNo_t nLayer = ls->nLayers - 1; nLayer > 0 && !rc; --nLayer ) {
+        struct Layer * l = ls->layers + nLayer;
+        /* For given layer, find highest link state to guarantee sorting
+         * within a certain state tier */
+        unsigned int maxStateOnThisLayer = _max_state_on_layer(l, 0x1);
+        for(unsigned int cState = maxStateOnThisLayer; cState >= minLength && !rc; --cState) {
+            size_t nNeighb = 0;
+            rc = _sort_links_of_tier( &wneighb, &nNeighbAllocated
+                                    , cState, l, &nNeighb, 0x1 );
+            if(rc) break;
+            /* run on sorted */
+            for(size_t i = 0; i < nNeighb; ++i) {
+                struct Cell * cCell = wneighb[i].cell;
+                assert(cCell);
+                _stack_push(&stack, cCell->to->data);
+                _eval_from(cCell, &stack, _candidates_buffer_append, &buf, minLength);
+                #ifdef NDEBUG
+                _stack_pull(&stack);
+                #else
+                assert(_stack_pull(&stack) == cCell->to->data);
+                #endif
+            }
+        }
+    }
+    if(!rc) rc = _candidates_buffer_emit_strict(&buf, callback, userdata);
+    _candidates_buffer_free(&buf);
+    free(wneighb);
+    free(stack.data);
+    return rc;
 }
 
 /*                          * * *   * * *   * * *                            */

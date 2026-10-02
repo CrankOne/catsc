@@ -15,6 +15,7 @@ extern "C" {
 #define CATSC_ERROR_ALLOC_FAILURE_POINTS             0x4  /* pointer instance allocation failed */
 #define CATSC_ERROR_ALLOC_FAILURE_CELLS              0x5  /* failed to (re)allocate cells */
 #define CATSC_ERROR_ALLOC_FAILURE_WEIGHTS            0x6  /* failed to (re)allocate weights buffer on layer */
+#define CATSC_ERROR_ALLOC_FAILURE_CANDIDATES         0x7  /* failed to (re)allocate track candidates buffer */
 #define CATSC_ERROR_RUNTIME_LOGIC                   0x10  /* runtime error flag */
 #define CATSC_RC_NO_SUCH_LAYER                      0x11  /* No layer of given number */
 #define CATSC_RC_EMPTY_GRAPH                        0x12  /* Graph has no connections (not actually erorr) */
@@ -252,10 +253,14 @@ cats_visit_dfs_moderate( struct cats_Layers * ls
  *        subsets, omitting sub-sequences
  *
  * This is collecting routine will invoke given callback on each found track
- * candidate, excluding their sub-sequences when they are permitted by
- * non-weighted geometrical filter. Hit insertion order
- * affects determinism: combinations corresponging to hits inserted first will
- * be considered first.
+ * candidate, excluding the ones which hits are all contained in some other
+ * emitted candidate (sub-sequences), when they are permitted by
+ * non-weighted geometrical filter. Candidates sharing some of the hits
+ * (intersecting) are emitted. Hit insertion order affects determinism:
+ * combinations corresponging to hits inserted first will be considered first.
+ *
+ * Candidates are buffered until graph traversal is done, so callback gets
+ * invoked only after all the candidates are found.
  *
  * This evaluation routine can be preferable for certain tracking scenarios
  * whith high multiplicity and low efficiency.
@@ -266,6 +271,19 @@ cats_visit_dfs_strict( struct cats_Layers * ls
                      , void (*callback)(const cats_HitData_t *, size_t, void *)
                      , void * userdata
                      );
+
+/**\brief Deprecated version of `cats_visit_dfs_strict()`
+ *
+ * Compares each candidate only with the last emitted one, so sub-sequences
+ * of an earlier candidate are emitted once another (intersecting) candidate
+ * was emitted in between. Kept for compatibility.
+ * */
+int
+cats_visit_dfs_strict_deprecated( struct cats_Layers * ls
+                                , unsigned int minLength
+                                , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                , void * userdata
+                                );
 
 /**\brief Iterates over resulting connection graph visiting enumerated
  *        subsets, preferring longest sequences, by hit insertion order.
@@ -344,6 +362,15 @@ cats_visit_dfs_strict_w( struct cats_Layers * ls
                        , void (*callback)(const cats_HitData_t *, size_t, void *)
                        , void * userdata
                        );
+
+/** Deprecated version of `cats_visit_dfs_strict_w()`, see
+ * `cats_visit_dfs_strict_deprecated()` */
+int
+cats_visit_dfs_strict_deprecated_w( struct cats_Layers * ls
+                                  , unsigned int minLength
+                                  , void (*callback)(const cats_HitData_t *, size_t, void *)
+                                  , void * userdata
+                                  );
 
 int
 cats_visit_dfs_longest_w( struct cats_Layers * ls

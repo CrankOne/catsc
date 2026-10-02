@@ -42,7 +42,11 @@ decreased redundancy):
 - **moderate** is similar to **excessive** but won't visit same triplets unless
   they're concurrent (at same depth)
 - **strict** strategy will provide candidates with intersections, but omit exact
-  sub-sequences
+  sub-sequences (candidates which hits are all contained in another emitted
+  candidate). Candidates are buffered and passed to collector after the
+  traversal is done. Former implementation compared a candidate only against
+  the last emitted one and is kept as **strict-deprecated** for compatibility
+  (`cats_visit_dfs_strict_deprecated()`, `collect_strict_deprecated()`).
 - **longest** resolves concurrency in favour of longest branch. Especially
   useful in combination with weighted filter.
 - **winning** resolves concurrency exclusively. This strategy effectively,

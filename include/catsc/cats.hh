@@ -363,8 +363,8 @@ public:
 
     ///\brief Collects all track candidates permitted by the filter
     ///
-    /// Forwards execution to `cats_for_each_track_candidate_strict()` that might
-    /// be insufficient or excessive (see docs).
+    /// Forwards execution to `cats_visit_dfs_strict()`, omitting candidates
+    /// that are sub-sequences of other ones (see docs).
     void collect_strict( iTrackCandidateCollector & collector
                        , cats_LayerNo_t minLength
                        ) {
@@ -378,6 +378,30 @@ public:
                 , c_f_wrapper_collect, &collector);
         } else {
             rc = cats_visit_dfs_strict(_layers, minLength
+                , c_f_wrapper_collect, &collector);
+        }
+        if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
+        collector.done();
+    }
+
+    ///\brief Collects track candidates with deprecated strict strategy
+    ///
+    /// Forwards execution to `cats_visit_dfs_strict_deprecated()`, which
+    /// compares candidates only with the last emitted one. Kept for
+    /// compatibility; prefer `collect_strict()`.
+    void collect_strict_deprecated( iTrackCandidateCollector & collector
+                                  , cats_LayerNo_t minLength
+                                  ) {
+        if(!_evaluated)
+            throw std::runtime_error("CATS was not evaluated, unable to collect.");
+        if(_wasCollected)
+            _reset_collection_flags();
+        int rc;
+        if(_isWeightedGraph) {
+            rc = cats_visit_dfs_strict_deprecated_w(_layers, minLength
+                , c_f_wrapper_collect, &collector);
+        } else {
+            rc = cats_visit_dfs_strict_deprecated(_layers, minLength
                 , c_f_wrapper_collect, &collector);
         }
         if(rc) throw std::runtime_error("collect() error");  // TODO: elaborate
